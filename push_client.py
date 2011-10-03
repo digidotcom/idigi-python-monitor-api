@@ -3,6 +3,7 @@ from threading import Thread
 import socket, ssl, pprint, struct, time
 import json
 import select
+import zlib
 
 # Push Opcodes.
 CONNECTION_REQUEST = 0x01
@@ -32,24 +33,22 @@ class PushSession(object):
     iDigi.
     """
     
-    def __init__(self, callback, monitor, client):
+    def __init__(self, callback, monitor_id, client):
         """
         Creates a PushSession for use with interacting with iDigi's
         Push Functionality.
         
         Arguments:
-        callback -- The callback function to invoke when data is received.  
-                    Must have 1 required parameter that will contain the
-                    payload.
-        monitor  -- A RestResource Monitor instance.  This is used for 
-                    determining monitor id, if compression is used,
-                    what format to expect data in, etc.
-        client   -- The client object this session is derived from.
+        callback   -- The callback function to invoke when data is received.  
+                      Must have 1 required parameter that will contain the
+                      payload.
+        monitor_id -- The id of the Monitor to observe.
+        client     -- The client object this session is derived from.
         """
-        self.callback = callback
-        self.monitor = monitor
-        self.client = client
-        self.socket = None
+        self.callback   = callback
+        self.monitor_id = monitor_id
+        self.client     = client
+        self.socket     = None
         
     def send_connection_request(self):
         """
@@ -71,7 +70,7 @@ class PushSession(object):
             # Password.
             payload += self.client.password
             # Monitor ID.
-            payload += struct.pack('!L', int(self.monitor.monId))
+            payload += struct.pack('!L', int(self.monitor_id))
 
             # Header 6 Bytes : Type [2 bytes] & Length [4 Bytes]
             # ConnectionRequest is Type 0x01.
@@ -102,8 +101,8 @@ ConnectionResponse Type (%d)." % (response_type, CONNECTION_RESPONSE))
 
             status_code = struct.unpack("!H", response[6:8])[0]
             if status_code != STATUS_OK:
-                raise PushException("Connection Response Status Code (%d) is not \
-STATUS_OK (%d)." % STATUS_OK)
+                raise PushException("Connection Response Status Code (%d) is \
+not STATUS_OK (%d)." % STATUS_OK)
 
             # Make socket blocking.
             self.socket.settimeout(0)
@@ -145,26 +144,24 @@ class SecurePushSession(PushSession):
     in ca_certs member file.
     """
     
-    def __init__(self, callback, monitor, client, ca_certs=None):
+    def __init__(self, callback, monitor_id, client, ca_certs=None):
         """
         Creates a PushSession wrapped in SSL for use with interacting with 
         iDigi's Push Functionality.
         
         Arguments:
-        callback -- The callback function to invoke when data is received.  
-                    Must have 1 required parameter that will contain the
-                    payload.
-        monitor  -- A RestResource Monitor instance.  This is used for 
-                    determining monitor id, if compression is used,
-                    what format to expect data in, etc.
-        client   -- The client object this session is derived from.
+        callback   -- The callback function to invoke when data is received.  
+                      Must have 1 required parameter that will contain the
+                      payload.
+        monitor_id -- The id of the Monitor to observe.
+        client     -- The client object this session is derived from.
         
         Keyword Arguments:
         ca_certs -- Path to a file containing Certificates.  If not None,
                     iDigi Server must present a certificate present in the 
                     ca_certs file.
         """
-        PushSession.__init__(self, callback, monitor, client)
+        PushSession.__init__(self, callback, monitor_id, client)
         self.ca_certs = ca_certs
     
     def start(self):
@@ -203,7 +200,8 @@ class PushClient(object):
     def __init__(self, username, password, hostname='developer.idigi.com', 
                 secure=True, ca_certs=None):
         """
-        Creates a Push Client for use in creating monitors and creating sessions for them.
+        Creates a Push Client for use in creating monitors and creating sessions 
+        for them.
         
         Arguments:
         username -- Username of user in iDigi to authenticate with.
@@ -234,14 +232,16 @@ class PushClient(object):
         Creates a Monitor instance in iDigi for a given list of topics.
         
         Arguments:
-        topics -- a string list of topics (i.e. ['DeviceCore[U]', 'FileDataCore']).
+        topics -- a string list of topics (i.e. ['DeviceCore[U]', 
+                  'FileDataCore']).
         
         Keyword Arguments:
         batch_size     -- How many Msgs received before sending data.
         batch_duration -- How long to wait before sending batch if it does not 
                           exceed batch_size.
-        compression    -- Compression value (i.e. 'zlib').
-        format_type    -- What format server should send data in (i.e. 'xml' or 'json').
+        compression    -- Compression value (i.e. 'gzip').
+        format_type    -- What format server should send data in (i.e. 'xml' or 
+                          'json').
         
         Returns a Monitor RestResource object.
         """
@@ -273,7 +273,8 @@ class PushClient(object):
         
     def get_monitor(self, topics):
         """
-        Attempts to find a Monitor in iDigi that matches the input list of topics.
+        Attempts to find a Monitor in iDigi that matches the input list of 
+        topics.
         
         Arguments:
         topics -- a string list of topics 
@@ -282,7 +283,8 @@ class PushClient(object):
         Returns a RestResource Monitor instance if match found, otherwise None.
         """
         # Query for Monitor conditionally by monTopic.
-        monitor = self.api.get_first('Monitor', condition="monTopic='%s'" % ','.join(topics))
+        monitor = self.api.get_first('Monitor', 
+            condition="monTopic='%s'" % ','.join(topics))
         if monitor is not None:
             monitor.location = 'Monitor/%s' % monitor.monId
         return monitor
@@ -308,17 +310,26 @@ class PushClient(object):
                         sck = session.socket
                         # 1.6mb payload limit (not enforced)
                         data = sck.recv(0x1000000)
-                        # TODO assert minimum length, parse type, factor compression
+                        # TODO assert minimum length, parse type, 
+                        # factor compression
                         if len(data) < 12:
                             # TODO: This is bad data, parse it and throw error
                             pass
                         response_type = struct.unpack('!H', data[0:2])[0]
                         aggregate_count = struct.unpack('!H', data[6:8])[0]
                         block_id = struct.unpack('!H', data[8:10])[0]
-                        compression = struct.unpack('!B', data[10:11])[0]
+                        compression = int(struct.unpack('!B', data[10:11])[0])
                         format = struct.unpack('!B', data[11:12])[0]
                         payload_size = struct.unpack('!i', data[12:16])
                         payload = data[16:]
+
+                        if compression == 0x01:
+                            # Data is compressed, uncompress it.
+                            print "Data is compressed"
+                            print payload
+                            print len(payload)
+                            payload = zlib.decompress(payload)
+
                         # TODO, throw in non-blocking event queue
                         if session.callback(payload):
                             # Send a Successful PublishMessageReceived with the 
@@ -356,15 +367,15 @@ class PushClient(object):
                       to understand parameters of the monitor.
         """
         if monitor is None and monitor_id is None:
-            raise PushException('Either monitor or monitor_id must be provided.')
-            
-        if monitor_id is not None:
-            location = 'Monitor/%s' % monitor_id
-            monitor = self.api.get_first(location)
-            monitor.location = location
+            raise PushException('monitor or monitor_id must be provided.')
 
-        session = SecurePushSession(callback, monitor, self, self.ca_certs) \
-            if self.secure else PushSession(callback, monitor, self)
+        # If monitor_id is not set, monitor must have been set, get it's monId.
+        mon_id = monitor_id
+        if mon_id is None:
+            mon_id = monitor.monId
+
+        session = SecurePushSession(callback, mon_id, self, self.ca_certs) \
+            if self.secure else PushSession(callback, mon_id, self)
 
         session.start()
         self.sessions[session.socket.fileno()] = session
@@ -395,7 +406,8 @@ def json_cb(data):
     """
     try:
         json_data = json.loads(data)
-        print "Data Received: %s" % (json.dumps(json_data, sort_keys=True, indent=4))
+        print "Data Received: %s" % (json.dumps(json_data, sort_keys=True, 
+                                        indent=4))
         return True
     except Exception, e:
         print e
@@ -406,12 +418,13 @@ if __name__ == "__main__":
     # TODO: Add CLI support using argparse, this will enable experimentation
     # and manual testing.
     # TODO: Add logging.
-    client = PushClient('satest_user', 'sa!test', hostname='devtest.idigi.com',
+    client = PushClient('satest', 'sa!test', hostname='test.idigi.com',
                         secure=True, ca_certs='idigi.pem')
     topics = [ 'DeviceCore' ]
     monitor = client.get_monitor(topics)
     if monitor is None:
-        monitor = client.create_monitor(topics, format_type='json')
+        monitor = client.create_monitor(topics, format_type='json',
+            compression='none')
     try:
         session = client.create_session(json_cb, monitor)
         while True:
@@ -422,4 +435,3 @@ if __name__ == "__main__":
     finally:
         client.stop_all()
         client.delete_monitor(monitor)
-        
