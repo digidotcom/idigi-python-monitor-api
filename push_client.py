@@ -41,10 +41,10 @@ class PushSession(object):
         callback -- The callback function to invoke when data is received.  
                     Must have 1 required parameter that will contain the
                     payload.
-        monitor -- A RestResource Monitor instance.  This is used for 
+        monitor  -- A RestResource Monitor instance.  This is used for 
                     determining monitor id, if compression is used,
                     what format to expect data in, etc.
-        client -- The client object this session is derived from.
+        client   -- The client object this session is derived from.
         """
         self.callback = callback
         self.monitor = monitor
@@ -154,15 +154,15 @@ class SecurePushSession(PushSession):
         callback -- The callback function to invoke when data is received.  
                     Must have 1 required parameter that will contain the
                     payload.
-        monitor -- A RestResource Monitor instance.  This is used for 
+        monitor  -- A RestResource Monitor instance.  This is used for 
                     determining monitor id, if compression is used,
                     what format to expect data in, etc.
-        client -- The client object this session is derived from.
+        client   -- The client object this session is derived from.
         
         Keyword Arguments:
         ca_certs -- Path to a file containing Certificates.  If not None,
-        iDigi Server must present a certificate present in the ca_certs
-        file.
+                    iDigi Server must present a certificate present in the 
+                    ca_certs file.
         """
         PushSession.__init__(self, callback, monitor, client)
         self.ca_certs = ca_certs
@@ -211,10 +211,10 @@ class PushClient(object):
         
         Keyword Arguments:
         hostname -- Hostname of iDigi server to connect to.
-        secure -- Whether or not to create a secure SSL wrapped session.
+        secure   -- Whether or not to create a secure SSL wrapped session.
         ca_certs -- Path to a file containing Certificates.  If not None,
-        iDigi Server must present a certificate present in the ca_certs
-        file if 'secure' is specified to True.
+                    iDigi Server must present a certificate present in the 
+                    ca_certs file if 'secure' is specified to True.
         """
         self.api      = Api(username, password, hostname)
         self.hostname = hostname
@@ -237,10 +237,11 @@ class PushClient(object):
         topics -- a string list of topics (i.e. ['DeviceCore[U]', 'FileDataCore']).
         
         Keyword Arguments:
-        batch_size -- How many Msgs received before sending data.
-        batch_duration -- How long to wait before sending batch if it does not exceed batch_size.
-        compression -- Compression value (i.e. 'zlib').
-        format_type -- What format server should send data in (i.e. 'xml' or 'json').
+        batch_size     -- How many Msgs received before sending data.
+        batch_duration -- How long to wait before sending batch if it does not 
+                          exceed batch_size.
+        compression    -- Compression value (i.e. 'zlib').
+        format_type    -- What format server should send data in (i.e. 'xml' or 'json').
         
         Returns a Monitor RestResource object.
         """
@@ -275,7 +276,8 @@ class PushClient(object):
         Attempts to find a Monitor in iDigi that matches the input list of topics.
         
         Arguments:
-        topics -- a string list of topics (i.e. ['DeviceCore[U]', 'FileDataCore']).
+        topics -- a string list of topics 
+                  (i.e. ['DeviceCore[U]', 'FileDataCore']).
         
         Returns a RestResource Monitor instance if match found, otherwise None.
         """
@@ -343,14 +345,15 @@ class PushClient(object):
         
         Arguments:
         callback -- Callback function to call when PublishMessage messages are
-            received. Expects 1 argument which will contain the payload of the 
-            pushed message.  Additionally, expects function to return True if 
-            callback was able to process the message, False or None otherwise.
+                    received. Expects 1 argument which will contain the 
+                    payload of the pushed message.  Additionally, expects 
+                    function to return True if callback was able to process 
+                    the message, False or None otherwise.
         
         Keyword Arguments:
-        monitor -- Monitor RestResource instance that will be registered on.
+        monitor    -- Monitor RestResource instance that will be registered on.
         monitor_id -- The id of the Monitor as id knows it, will be queried 
-            to understand parameters of the monitor.
+                      to understand parameters of the monitor.
         """
         if monitor is None and monitor_id is None:
             raise PushException('Either monitor or monitor_id must be provided.')
@@ -400,6 +403,9 @@ def json_cb(data):
     return False
         
 if __name__ == "__main__":
+    # TODO: Add CLI support using argparse, this will enable experimentation
+    # and manual testing.
+    # TODO: Add logging.
     client = PushClient('satest_user', 'sa!test', hostname='devtest.idigi.com',
                         secure=True, ca_certs='idigi.pem')
     topics = [ 'DeviceCore' ]
@@ -410,6 +416,9 @@ if __name__ == "__main__":
         session = client.create_session(json_cb, monitor)
         while True:
             time.sleep(3.14)
+    except KeyboardInterrupt:
+        # Expect KeyboardInterrupt (CTRL+C or CTRL+D) and print friendly msg.
+        print "Keyboard Interrupt Received.  Closing Sessions and Cleaning Up."
     finally:
         client.stop_all()
         client.delete_monitor(monitor)
