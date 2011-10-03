@@ -179,7 +179,7 @@ class SecurePushSession(PushSession):
             # Create socket, wrap in SSL and connect.
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             # Validate that certificate server uses matches what we expect.
-            if ca_certs is not None:
+            if self.ca_certs is not None:
                 self.socket = ssl.wrap_socket(self.socket, 
                                                 cert_reqs=ssl.CERT_REQUIRED, 
                                                 ca_certs=self.ca_certs)
@@ -296,6 +296,9 @@ class PushClient(object):
         try:
             while not self.closed:
                 try:
+                    # TODO if any of the descriptors become bad
+                    # (This can happen if session is stopped) remove
+                    # it from sessions.
                     inputready, outputready, exceptready =\
                         select.select(self.sessions.keys(), [], [], .1)
                     for sock in inputready:
@@ -333,6 +336,22 @@ class PushClient(object):
                 session.stop()
                 
     def create_session(self, callback, monitor=None, monitor_id=None):
+        """
+        Creates and Returns a PushSession instance based on the input monitor
+        and callback.  When data is received, callback will be invoked.
+        If neither monitor or monitor_id are specified, throws an Exception.
+        
+        Arguments:
+        callback -- Callback function to call when PublishMessage messages are
+            received. Expects 1 argument which will contain the payload of the 
+            pushed message.  Additionally, expects function to return True if 
+            callback was able to process the message, False or None otherwise.
+        
+        Keyword Arguments:
+        monitor -- Monitor RestResource instance that will be registered on.
+        monitor_id -- The id of the Monitor as id knows it, will be queried 
+            to understand parameters of the monitor.
+        """
         if monitor is None and monitor_id is None:
             raise PushException('Either monitor or monitor_id must be provided.')
             
@@ -341,7 +360,7 @@ class PushClient(object):
             monitor = self.api.get_first(location)
             monitor.location = location
 
-        session = SecurePushSession(callback, monitor, self, ca_certs) \
+        session = SecurePushSession(callback, monitor, self, self.ca_certs) \
             if self.secure else PushSession(callback, monitor, self)
 
         session.start()
@@ -354,6 +373,9 @@ class PushClient(object):
         return session
 
     def stop_all(self):
+        """
+        Stops all session activity.  Blocks until io thread dies.
+        """
         if self.__io_thread is not None:
             self.closed = True
             
@@ -361,15 +383,24 @@ class PushClient(object):
                 time.sleep(1)
 
 def json_cb(data):
+    """
+    Sample callback, parses data as json and pretty prints it.
+    Returns True is json is valid, False otherwise.
+    
+    Arguments:
+    data -- The payload of the PublishMessage.
+    """
     try:
         json_data = json.loads(data)
         print "Data Received: %s" % (json.dumps(json_data, sort_keys=True, indent=4))
+        return True
     except Exception, e:
         print e
-    return True
+    
+    return False
         
 if __name__ == "__main__":
-    client = PushClient('satest', 'sa!test', hostname='devtest.idigi.com',
+    client = PushClient('satest_user', 'sa!test', hostname='devtest.idigi.com',
                         secure=True, ca_certs='idigi.pem')
     topics = [ 'DeviceCore' ]
     monitor = client.get_monitor(topics)
