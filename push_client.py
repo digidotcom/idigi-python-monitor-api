@@ -122,6 +122,7 @@ not STATUS_OK (%d)." % STATUS_OK)
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.client.hostname, PUSH_OPEN_PORT))
+            self.socket.setblocking(0)
         except Exception, e:
             self.socket.close()
             self.socket = None
@@ -187,6 +188,7 @@ class SecurePushSession(PushSession):
             # cert.  It would be really nice to assert that the hostname
             # matches what we expect.
             self.socket.connect((self.client.hostname, PUSH_SECURE_PORT))
+            self.socket.setblocking(0)
 
         except Exception, e:
             self.socket.close()
@@ -308,26 +310,32 @@ class PushClient(object):
                     for sock in inputready:
                         session = self.sessions[sock]
                         sck = session.socket
-                        # 1.6mb payload limit (not enforced)
-                        data = sck.recv(0x1000000)
-                        # TODO assert minimum length, parse type, 
-                        # factor compression
-                        if len(data) < 12:
-                            # TODO: This is bad data, parse it and throw error
-                            pass
+                        
+                        # Read header information before receiving rest of
+                        # message.
+                        data = sck.recv(6)
                         response_type = struct.unpack('!H', data[0:2])[0]
-                        aggregate_count = struct.unpack('!H', data[6:8])[0]
-                        block_id = struct.unpack('!H', data[8:10])[0]
-                        compression = int(struct.unpack('!B', data[10:11])[0])
-                        format = struct.unpack('!B', data[11:12])[0]
-                        payload_size = struct.unpack('!i', data[12:16])
-                        payload = data[16:]
+                        message_length = struct.unpack('!i', data[2:6])[0]
+                        
+                        if response_type != PUBLISH_MESSAGE:
+                            print "Response Type (%x) does not match \
+PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE)
+                            continue
+
+                        data = sck.recv(message_length)
+                        while len(data) < message_length :
+                             time.sleep(0.1)
+                             data = data + sck.recv(message_length - len(data))
+
+                        block_id = struct.unpack('!H', data[0:2])[0]
+                        aggregate_count = struct.unpack('!H', data[2:4])[0]
+                        compression = struct.unpack('!B', data[4:5])[0]
+                        format = struct.unpack('!B', data[5:6])[0]
+                        payload_size = struct.unpack('!i', data[6:10])
+                        payload = data[10:]
 
                         if compression == 0x01:
                             # Data is compressed, uncompress it.
-                            print "Data is compressed"
-                            print payload
-                            print len(payload)
                             payload = zlib.decompress(payload)
 
                         # TODO, throw in non-blocking event queue
@@ -411,7 +419,7 @@ def json_cb(data):
         return True
     except Exception, e:
         print e
-    
+       # print data
     return False
         
 if __name__ == "__main__":
@@ -420,7 +428,8 @@ if __name__ == "__main__":
     # TODO: Add logging.
     client = PushClient('satest', 'sa!test', hostname='test.idigi.com',
                         secure=True, ca_certs='idigi.pem')
-    topics = [ 'DeviceCore' ]
+    topics = [ 'FileData' ]
+
     monitor = client.get_monitor(topics)
     if monitor is None:
         monitor = client.create_monitor(topics, format_type='json',
