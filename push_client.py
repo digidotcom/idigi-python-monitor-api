@@ -123,6 +123,7 @@ STATUS_OK (%d)." % STATUS_OK)
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.client.hostname, PUSH_OPEN_PORT))
+            self.socket.setblocking(0)
         except Exception, e:
             self.socket.close()
             self.socket = None
@@ -190,6 +191,7 @@ class SecurePushSession(PushSession):
             # cert.  It would be really nice to assert that the hostname
             # matches what we expect.
             self.socket.connect((self.client.hostname, PUSH_SECURE_PORT))
+            self.socket.setblocking(0)
 
         except Exception, e:
             self.socket.close()
@@ -307,18 +309,20 @@ class PushClient(object):
                         session = self.sessions[sock]
                         sck = session.socket
                         # 1.6mb payload limit (not enforced)
-                        data = sck.recv(0x1000000)
-                        # TODO assert minimum length, parse type, factor compression
-                        if len(data) < 12:
-                            # TODO: This is bad data, parse it and throw error
-                            pass
+                        data = sck.recv(6)
                         response_type = struct.unpack('!H', data[0:2])[0]
-                        aggregate_count = struct.unpack('!H', data[6:8])[0]
-                        block_id = struct.unpack('!H', data[8:10])[0]
-                        compression = struct.unpack('!B', data[10:11])[0]
-                        format = struct.unpack('!B', data[11:12])[0]
-                        payload_size = struct.unpack('!i', data[12:16])
-                        payload = data[16:]
+                        aggregate_count = struct.unpack('!i', data[2:6])[0]
+                        if response_type != 3:
+                            print "?? %s response type"%response_type 
+                        data = sck.recv(aggregate_count)
+                        while len(data) < aggregate_count :
+                             time.sleep(0.1)
+                             data = data + sck.recv(aggregate_count - len(data))
+                        block_id = struct.unpack('!H', data[0:2])[0]
+                        compression = struct.unpack('!B', data[2:3])[0]
+                        format = struct.unpack('!B', data[3:4])[0]
+                        payload_size = struct.unpack('!i', data[4:8])
+                        payload = data[10:]
                         # TODO, throw in non-blocking event queue
                         if session.callback(payload):
                             # Send a Successful PublishMessageReceived with the 
@@ -399,16 +403,16 @@ def json_cb(data):
         return True
     except Exception, e:
         print e
-    
+       # print data
     return False
         
 if __name__ == "__main__":
     # TODO: Add CLI support using argparse, this will enable experimentation
     # and manual testing.
     # TODO: Add logging.
-    client = PushClient('satest_user', 'sa!test', hostname='devtest.idigi.com',
-                        secure=True, ca_certs='idigi.pem')
-    topics = [ 'DeviceCore' ]
+    client = PushClient('satest', 'sa!test', hostname='devtest.idigi.com',
+                        secure=False, ca_certs='idigi.pem')
+    topics = [ 'FileData' ]
     monitor = client.get_monitor(topics)
     if monitor is None:
         monitor = client.create_monitor(topics, format_type='json')
