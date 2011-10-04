@@ -419,7 +419,6 @@ def json_cb(data):
         return True
     except Exception, e:
         print e
-       # print data
     return False
         
 if __name__ == "__main__":
