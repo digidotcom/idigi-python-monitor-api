@@ -460,9 +460,9 @@ if __name__ == "__main__":
         type=str,
         help='File containing iDigi certificates to authenticate server with.')
 
-    parser.add_argument('--secure', dest='secure', action='store',
-        type=int, default=1, choices=range(0,1),
-        help='Whether or not to create an SSL secured session.')
+    parser.add_argument('--insecure', dest='secure', action='store_false',
+        default=True,
+        help='Prevent client from making secure (SSL) connection.')
 
     parser.add_argument('--compression', dest='compression', action='store',
         type=str, default='none', choices=['none', 'gzip'],
@@ -483,10 +483,8 @@ batchsize not met.')
         
     args = parser.parse_args()
 
-    secure = True if args.secure == 1 else False
-
     client = PushClient(args.username, args.password, hostname=args.host,
-                        secure=secure, ca_certs=args.ca_certs)
+                        secure=args.secure, ca_certs=args.ca_certs)
     
     topics = args.topics.split(',')
     monitor = client.get_monitor(topics)
