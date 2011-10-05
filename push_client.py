@@ -4,6 +4,7 @@ import socket, ssl, pprint, struct, time
 import json
 import select
 import zlib
+import argparse
 
 # Push Opcodes.
 CONNECTION_REQUEST = 0x01
@@ -291,7 +292,14 @@ class PushClient(object):
             monitor.location = 'Monitor/%s' % monitor.monId
         return monitor
         
-    
+    def __restart_session(self, session):
+        print "Attempting restart session for monitorID %s" % session.monitor_id
+        # remove old session key
+        del self.sessions[session.socket.fileno()]
+        session.stop()
+        session.start()
+        self.sessions[session.socket.fileno()] = session
+
     def __select(self):
         """
         While the client is not marked as closed, performs a socket select
@@ -314,6 +322,11 @@ class PushClient(object):
                         # Read header information before receiving rest of
                         # message.
                         data = sck.recv(6)
+                        
+                        # check for socket close event
+                        if len(data) == 0:
+                            self.__restart_session(session)
+                            
                         response_type = struct.unpack('!H', data[0:2])[0]
                         message_length = struct.unpack('!i', data[2:6])[0]
                         
@@ -336,6 +349,7 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE)
 
                         if compression == 0x01:
                             # Data is compressed, uncompress it.
+                            # Note, this doesn't work yet.
                             payload = zlib.decompress(payload)
 
                         # TODO, throw in non-blocking event queue
@@ -393,7 +407,7 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE)
             self.__io_thread = Thread(target=self.__select)
             self.__io_thread.start()
         return session
-
+    
     def stop_all(self):
         """
         Stops all session activity.  Blocks until io thread dies.
@@ -425,14 +439,59 @@ if __name__ == "__main__":
     # TODO: Add CLI support using argparse, this will enable experimentation
     # and manual testing.
     # TODO: Add logging.
-    client = PushClient('satest', 'sa!test', hostname='test.idigi.com',
-                        secure=True, ca_certs='idigi.pem')
-    topics = [ 'FileData' ]
+    parser = argparse.ArgumentParser(description="iDigi Push Client Sample", 
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    
+    parser.add_argument('username', type=str,
+        help='Username to authenticate with.')
 
+    parser.add_argument('password', type=str,
+        help='Password to authenticate with.')
+
+    parser.add_argument('--topics', '-t', dest='topics', action='store', 
+        type=str, default='DeviceCore', 
+        help='A comma-separated list of topics to listen on.')
+
+    parser.add_argument('--host', '-a', dest='host', action='store', 
+        type=str, default='test.idigi.com', 
+        help='iDigi server to connect to.')
+
+    parser.add_argument('--ca_certs', dest='ca_certs', action='store',
+        type=str,
+        help='File containing iDigi certificates to authenticate server with.')
+
+    parser.add_argument('--secure', dest='secure', action='store',
+        type=bool, default=True,
+        help='Whether or not to create an SSL secured session.')
+
+    parser.add_argument('--compression', dest='compression', action='store',
+        type=str, default='none', choices=['none', 'gzip'],
+        help='Compression type to use.')
+
+    parser.add_argument('--format', dest='format', action='store',
+        type=str, default='json', choices=['json', 'xml'],
+        help='Format data should be pushed up in.')
+
+    parser.add_argument('--batchsize', dest='batchsize', action='store',
+        type=int, default=1, choices=range(0, 1024),
+        help='Amount of messages to batch up before sending data.')
+
+    parser.add_argument('--batchduration', dest='batchduration', action='store',
+        type=int, default=60, choices=range(0, 1024),
+        help='Number of seconds to wait before sending batch if \
+batchsize not met.')
+        
+    args = parser.parse_args()
+
+    client = PushClient(args.username, args.password, hostname=args.host,
+                        secure=args.secure, ca_certs=args.ca_certs)
+    
+    topics = args.topics.split(',')
     monitor = client.get_monitor(topics)
     if monitor is None:
-        monitor = client.create_monitor(topics, format_type='json',
-            compression='none')
+        monitor = client.create_monitor(topics, format_type=args.format,
+            compression=args.compression, batch_size=args.batchsize, 
+            batch_duration=args.batchduration)
     try:
         session = client.create_session(json_cb, monitor)
         while True:
