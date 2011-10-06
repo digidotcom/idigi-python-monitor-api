@@ -66,7 +66,8 @@ Retrieving Metering Consumption Values from all Metering Server Clusters against
 account.
 
     # Retrieve all 0x0 attributes on the 0x702 (1794) server (0x0) Cluster.
-    attributes = api.get('XbeeAttributeDataCore', condition=\"xcClusterId='1794' \
+    attributes = api.get('XbeeAttributeDataCore',
+                             condition=\"xcClusterId='1794' \
                              and xcClusterType='0' and xaAttributeId='0'\")
 
     # Map Xbee Address/Endpoint ID to consumption
@@ -120,13 +121,16 @@ Posting an SCI Request to a Device:
 """
 
 import logging
-logging.basicConfig(format='%(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
+logging.basicConfig(format='%(asctime)s %(message)s', 
+                    datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 log = logging.getLogger(__name__)
 
 import httplib, urllib
 from base64 import encodestring
 from xml.dom.minidom import getDOMImplementation, parseString, Element
 import uuid, re
+
+import warnings
 
 impl = getDOMImplementation()
 
@@ -138,6 +142,13 @@ Roles = enum(SYSTEM_ADMIN=['6', '2', '5'], READ_ONLY_SYS_ADMIN=['3','10','6'],
                 CUSTOMER_ADMIN=['7', '6', '8'], USER=['6', '8'],
                 READ_ONLY_USER=['6', '11'], APPLICATION=['8'],
                 READ_ONLY_APPLICATION=['11'])
+
+class RestException(Exception):
+
+    def __init__(self, response):
+        Exception.__init__(self, 'Status Code %d : %s'
+                            % (response.status, response.reason))
+        self.response = response
 
 def getText(elem):
     rc = []
@@ -181,7 +192,8 @@ class RestResource:
                 if isinstance(value, RestResource):
                     value.fill_element(document,element)
                 else:
-                    if value: element.appendChild(document.createTextNode(value))
+                    if value: 
+                        element.appendChild(document.createTextNode(value))
                 parent.appendChild(element)
 
     def todocument(self):
@@ -238,9 +250,13 @@ def parse_response(response, resource):
     # if the resource name is result there were multiple entries,
     # return array.
     if resource_name == 'result':
-        start = parse_node(resource_elem.getElementsByTagName("requestedStartRow")[0])
-        remaining = parse_node(resource_elem.getElementsByTagName("remainingSize")[0])
-        total = parse_node(resource_elem.getElementsByTagName("resultTotalRows")[0])
+        start = parse_node(
+                    resource_elem.getElementsByTagName("requestedStartRow")[0])
+        remaining = parse_node(
+                        resource_elem.getElementsByTagName("remainingSize")[0])
+        total = parse_node(
+                    resource_elem.getElementsByTagName("resultTotalRows")[0])
+        
         resources = [node for node in resource_elem.childNodes]
         resource_objs = []
         for resource_elem in resources:
@@ -263,8 +279,8 @@ def parse_response(response, resource):
 class Api:
     
     def __init__(self, username, password,
-                 hostname='developer.idigi.com', ws_root='/ws', content_type='text/xml', 
-                 cst_id=None, usr_id=None):
+                 hostname='developer.idigi.com', ws_root='/ws', 
+                 content_type='text/xml', cst_id=None, usr_id=None):
         self.hostname = hostname
         self.ws_root = ws_root
         self.cst_id = cst_id
@@ -283,7 +299,7 @@ class Api:
         Arguments:
         request: The full SCI string to send.
         """
-        connection = httplib.HTTPSConnection(self.hostname)
+        connection = httplib.HTTPConnection(self.hostname)
         url = '%s/sci' % self.ws_root
         
         connection.request('POST', url, request, self.headers)
@@ -291,12 +307,11 @@ class Api:
         response_str = response.read()
         connection.close()
 
-        if response.status == 202 or response.status == 201 or response.status == 200:
+        if response.status == 202 or response.status == 201 or \
+            response.status == 200:
             return response_str
         else:
-            raise Exception(
-                'Returned Non 201/200 Status Code: %d : %s. Data = %s'
-                % (response.status, response.reason, response_str))        
+            raise RestException(response)        
     
     def sci_expect_fail(self, request):
         """
@@ -306,7 +321,7 @@ class Api:
         Arguments:
         request: The full SCI string to send.
         """
-        connection = httplib.HTTPSConnection(self.hostname)
+        connection = httplib.HTTPConnection(self.hostname)
         url = '%s/sci' % self.ws_root
         
         connection.request('POST', url, request, self.headers)
@@ -319,7 +334,7 @@ class Api:
 
     def sci_status(self, jobId):
     
-        connection = httplib.HTTPSConnection(self.hostname)
+        connection = httplib.HTTPConnection(self.hostname)
         url = '%s/sci/%s' % (self.ws_root, jobId)
         
         log.info("Performing GET on %s" % url)
@@ -333,13 +348,11 @@ class Api:
         if response.status == 200:
             return response_str
         else:
-            raise Exception(
-                'Returned Non 200 Status Code: %d : %s. Data = %s'
-                % (response.status, response.reason, response_str))
+            raise RestException(response)
         
         
     def get(self, resource, **params):
-        connection = httplib.HTTPSConnection(self.hostname)
+        connection = httplib.HTTPConnection(self.hostname)
         url = '%s/%s' % (self.ws_root, resource)
 
         if params:
@@ -357,11 +370,12 @@ class Api:
             response = parse_response(response_str, resource.split('/')[0])
             return response
         else:
-            raise Exception('Return Non 200 Status Code %d : %s.  Data = %s'
-                            % (response.status, response.reason, response_str))
+            raise RestException(response)
                             
     def get_raw(self, resource, **params):
-        connection = httplib.HTTPSConnection(self.hostname)
+        warnings.warn('get_raw is deprecated.  Please use get instead.', 
+            DeprecationWarning)
+        connection = httplib.HTTPConnection(self.hostname)
         url = '%s/%s' % (self.ws_root, resource)
         
         if params:
@@ -378,8 +392,7 @@ class Api:
             return response_str
             
         else:
-            raise Exception ('Return Non 200 Status Code %d : %s. Data = %s'
-                             % (response.status, response.reason, response_str))
+            raise RestException(response)
                              
     def get_first(self, resource, **params):
         result = self.get(resource, **params)
@@ -390,7 +403,7 @@ class Api:
         return None
             
     def __update(self, resource, method, **params):
-        connection = httplib.HTTPSConnection(self.hostname)
+        connection = httplib.HTTPConnection(self.hostname)
         request = resource.todocument()
         if hasattr(resource, 'location'):
             target = resource.location
@@ -414,15 +427,15 @@ class Api:
             location = response.getheader('Location')
             return location
         else:
-            raise Exception(
-                'Returned Non 201/200 Status Code: %d : %s. Data = %s'
-                % (response.status, response.reason, response_str))
+            raise RestException(response)
 
     def post(self, resource, **params):
         return self.__update(resource, 'POST', **params)
 
     def post_raw(self, resource, content):
-        connection = httplib.HTTPSConnection(self.hostname)
+        warnings.warn('post_raw is deprecated.  Please use post instead.', 
+            DeprecationWarning)
+        connection = httplib.HTTPConnection(self.hostname)
         
         url = '%s/%s' % (self.ws_root, resource)
         
@@ -434,18 +447,20 @@ class Api:
         connection.close()
         
         
-        if response.status == 202 or response.status == 201 or response.status == 200:
+        if response.status == 202 or response.status == 201 \
+            or response.status == 200:
             return response_str
         else:
-            raise Exception(
-                'Returned Non 202/201/200 Status Code: %d : %s. Data = %s'
-                % (response.status, response.reason, response_str))
+            raise RestException(response)
         
     def put(self, resource, **params):
         return self.__update(resource, 'PUT', **params)
 
     def put_raw(self, resource, content, **params):
-        connection = httplib.HTTPSConnection(self.hostname)
+        warnings.warn('put_raw is deprecated.  Please use put instead.', 
+            DeprecationWarning)
+
+        connection = httplib.HTTPConnection(self.hostname)
         
         url = '%s/%s' % (self.ws_root, resource)
         
@@ -462,12 +477,11 @@ class Api:
         response_str = response.read()
         connection.close()
 
-        if response.status == 202 or response.status == 201 or response.status == 200:
+        if response.status == 202 or response.status == 201 \
+            or response.status == 200:
             return response_str
         else:
-            raise Exception(
-                'Returned Non 202/201/200 Status Code: %d : %s. Data = %s'
-                % (response.status, response.reason, response_str))
+            raise RestException(response)
     
     def delete(self, resource):
         if resource.location:
@@ -477,7 +491,7 @@ class Api:
 
     def delete_location(self, resource):
         log.info("DELETE on %s." % resource)
-        connection = httplib.HTTPSConnection(self.hostname)
+        connection = httplib.HTTPConnection(self.hostname)
         connection.request('DELETE', '%s/%s' % (self.ws_root, resource), \
                            '', self.headers)
 
@@ -486,9 +500,7 @@ class Api:
         connection.close()
 
         if not response.status == 200:
-            raise Exception(
-                'Returned Non 200 Status Code: %d : %s. Data= %s'
-                % (response.status, response.reason, response_str))
+            raise RestException(response)
                 
     def get_rate_plan(self, name, description=None):
         
@@ -513,8 +525,9 @@ class Api:
         
     def create_account(self):
         """
-        Uses /ws/Account to create a Customer Account with a UUID based Company Name.
-        Additionally creates a UUID based User Name and Service Contract for Device 
+        Uses /ws/Account to create a Customer Account with a UUID based 
+        Company Name.  Additionally creates a UUID based User Name and 
+        Service Contract for Device 
         Management, Web Service Messaging, and Device Messaging.
         
         Returns an Api instance for the created User.
@@ -566,6 +579,7 @@ class Api:
         usr_id = matcher.group(2)
         
         user = self.get_first('User/%s' % usr_id)
-        api = Api(user.usrUserName, 'ZAQ!2wsx', hostname=self.hostname, ws_root=self.ws_root, cst_id=cst_id, usr_id=usr_id)
+        api = Api(user.usrUserName, 'ZAQ!2wsx', hostname=self.hostname, 
+                    ws_root=self.ws_root, cst_id=cst_id, usr_id=usr_id)
         
         return api

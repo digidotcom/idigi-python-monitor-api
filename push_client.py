@@ -1,10 +1,10 @@
 from idigi_ws_api import Api, RestResource
 from threading import Thread
+from xml.dom.minidom import parseString
 import socket, ssl, pprint, struct, time
 import json
 import select
 import zlib
-import argparse
 
 # Push Opcodes.
 CONNECTION_REQUEST = 0x01
@@ -314,7 +314,7 @@ class PushClient(object):
                     # (This can happen if session is stopped) remove
                     # it from sessions.
                     inputready, outputready, exceptready =\
-                        select.select(self.sessions.keys(), [], [], .1)
+                        select.select(self.sessions.keys(), [], [], 1)
                     for sock in inputready:
                         session = self.sessions[sock]
                         sck = session.socket
@@ -325,7 +325,7 @@ class PushClient(object):
                         
                         # check for socket close event
                         if len(data) == 0:
-                            self.__restart_session(session)
+                            continue
                             
                         response_type = struct.unpack('!H', data[0:2])[0]
                         message_length = struct.unpack('!i', data[2:6])[0]
@@ -363,9 +363,12 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE)
                             
                             
                 except Exception, ex:
-                    print ex
-                    pass # Raises exception if any descriptors are bad
-                    # which is fine.
+                    print "Error: ", ex
+                    if session.socket is not None:
+                        # Restart session if socket still 
+                        # exists.
+                        self.__restart_session(session)
+
         finally:
             for session in self.sessions.values():
                 session.stop()
@@ -421,7 +424,7 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE)
 def json_cb(data):
     """
     Sample callback, parses data as json and pretty prints it.
-    Returns True is json is valid, False otherwise.
+    Returns True if json is valid, False otherwise.
     
     Arguments:
     data -- The payload of the PublishMessage.
@@ -434,11 +437,28 @@ def json_cb(data):
     except Exception, e:
         print e
     return False
+
+def xml_cb(data):
+    """
+    Sample callback, parses data as xml and pretty prints it.
+    Returns True if xml is valid, False otherwise.
+
+    Arguments:
+    data -- The payload of the PublishMessage.
+    """
+    try:
+        dom = parseString(data)
+        print "Data Received: %s" % (dom.toprettyxml())
+
+        return True
+    except Exception, e:
+        print e
+    
+    return False
         
 if __name__ == "__main__":
-    # TODO: Add CLI support using argparse, this will enable experimentation
-    # and manual testing.
     # TODO: Add logging.
+    import argparse
     parser = argparse.ArgumentParser(description="iDigi Push Client Sample", 
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     
@@ -473,11 +493,11 @@ if __name__ == "__main__":
         help='Format data should be pushed up in.')
 
     parser.add_argument('--batchsize', dest='batchsize', action='store',
-        type=int, default=1, choices=range(0, 1024),
+        type=int, default=1,
         help='Amount of messages to batch up before sending data.')
 
     parser.add_argument('--batchduration', dest='batchduration', action='store',
-        type=int, default=60, choices=range(0, 1024),
+        type=int, default=60,
         help='Number of seconds to wait before sending batch if \
 batchsize not met.')
         
@@ -493,7 +513,8 @@ batchsize not met.')
             compression=args.compression, batch_size=args.batchsize, 
             batch_duration=args.batchduration)
     try:
-        session = client.create_session(json_cb, monitor)
+        callback = json_cb if args.format=="json" else xml_cb
+        session = client.create_session(callback, monitor)
         while True:
             time.sleep(3.14)
     except KeyboardInterrupt:
