@@ -188,7 +188,7 @@ class SecurePushSession(PushSession):
         Creates a SSL connection to the iDigi Server and sends a 
         ConnectionRequest message.
         """
-        log.info("Starting SSL Session for Monitor %d." % self.monitor_id)
+        log.info("Starting SSL Session for Monitor %s." % self.monitor_id)
         if self.socket is not None:
             raise Exception("Socket already established for %s." % self)
         
