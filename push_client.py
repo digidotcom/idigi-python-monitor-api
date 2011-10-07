@@ -215,7 +215,70 @@ class SecurePushSession(PushSession):
             
         self.send_connection_request()
 
+class CallbackWorkerPool(object):
+    """
+    A Worker Pool implementation that creates a number of predefined threads
+    used for invoking Session callbacks.
+    """
+
+    def __consume_queue(self):
+        while True:
+            session, block_id, data = self.__queue.get()
+            try:
+                if session.callback(data):
+                    # Send a Successful PublishMessageReceived with the 
+                    # block id sent in request
+                    if self.__write_queue is not None:
+                        response_message = struct.pack('!HHH', 
+                                            PUBLISH_MESSAGE_RECEIVED, 
+                                            block_id, 200)
+                        self.__write_queue.put((session.socket, 
+                            response_message))
+            except Exception, e:
+                log.exception(e)
+
+            self.__queue.task_done()
+
+
+    def __init__(self, write_queue=None, size=20):
+        """
+        Creates a Callback Worker Pool for use in invoking Session Callbacks 
+        when data is received by a push client.
+
+        Keyword Arguments:
+        write_queue -- Queue used for queueing up socket write events for when 
+                       a payload message is received and processed.
+        size        -- The number of worker threads to invoke callbacks.
+        """
+        # Used to queue up PublishMessageReceived events to be sent back to 
+        # the iDigi server.
+        self.__write_queue = write_queue
+        # Used to queue up sessions and data to callback with.
+        self.__queue = Queue(size)
+        # Number of workers to create.
+        self.size = size
+
+        for _ in range(size): 
+            worker = Thread(target=self.__consume_queue)
+            worker.daemon = True
+            worker.start()
+
+    def queue_callback(self, session, block_id, data):
+        """
+        Queues up a callback event to occur for a session with the given 
+        payload data.  Will block if the queue is full.
+
+        Keyword Arguments:
+        session  -- the session with a defined callback function to call.
+        block_id -- the block_id of the message received.
+        data     -- the data payload of the message received.
+        """
+        self.__queue.put((session, block_id, data))        
+
 class PushClient(object):
+    """
+    A Client for the 'Push' feature in iDigi.
+    """
     
     def __init__(self, username, password, hostname='developer.idigi.com', 
                 secure=True, ca_certs=None):
@@ -242,11 +305,17 @@ class PushClient(object):
         self.ca_certs = ca_certs
         
         # A dict mapping Sockets to their PushSessions
-        self.sessions        = {}
-        self.__io_thread     = None
-        self.__writer_thread = None
-        self.closed          = False
-        self.__write_queue   = Queue()
+        self.sessions          = {}
+        # IO thread is used monitor sockets and consume data.
+        self.__io_thread       = None
+        # Writer thread is used to send data on sockets.
+        self.__writer_thread   = None
+        # Write queue is used to queue up data to write to sockets.
+        self.__write_queue     = Queue()
+        # A pool that monitors callback events and invokes them.
+        self.__callback_pool   = CallbackWorkerPool(self.__write_queue)
+
+        self.closed            = False
 
 
     def create_monitor(self, topics, batch_size=1, batch_duration=0, 
@@ -336,6 +405,7 @@ class PushClient(object):
             try:
                 socket, data = self.__write_queue.get(timeout=0.1)
                 socket.send(data)
+                self.__write_queue.task_done()
             except Empty,e:
                 pass # nothing to write after timeout
 
@@ -399,16 +469,11 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE))
                             # Data is compressed, uncompress it.
                             # Note, this doesn't work yet.
                             payload = zlib.decompress(payload)
-
-                        # TODO, throw in non-blocking event queue
-                        if session.callback(payload):
-                            # Send a Successful PublishMessageReceived with the 
-                            # block id sent in request
-                            response_message = struct.pack('!HHH', 
-                                                PUBLISH_MESSAGE_RECEIVED, 
-                                                block_id, 200)
-                            self.__write_queue.put(
-                                (session.socket, response_message))
+                        
+                        # Enqueue payload into a callback queue to be
+                        # invoked.
+                        self.__callback_pool.queue_callback(session, 
+                            block_id, payload)
                         
                 except Exception, ex:
                     log.exception(ex)
