@@ -121,7 +121,7 @@ Posting an SCI Request to a Device:
 """
 
 import logging
-logging.basicConfig(format='%(asctime)s %(message)s', 
+logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', 
                     datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 log = logging.getLogger(__name__)
 
