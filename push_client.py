@@ -8,8 +8,6 @@ import zlib
 import logging
 from Queue import Queue, Empty
 
-logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', 
-                    datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 log = logging.getLogger(__name__)
 
 import httplib, urllib
@@ -141,6 +139,7 @@ not STATUS_OK (%d)." % STATUS_OK)
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.client.hostname, PUSH_OPEN_PORT))
+            self.socket.setblocking(0)
         except Exception, e:
             self.socket.close()
             self.socket = None
@@ -207,7 +206,7 @@ class SecurePushSession(PushSession):
             # cert.  It would be really nice to assert that the hostname
             # matches what we expect.
             self.socket.connect((self.client.hostname, PUSH_SECURE_PORT))
-
+            self.socket.setblocking(0)
         except Exception, e:
             self.socket.close()
             self.socket = None
@@ -581,7 +580,9 @@ def xml_cb(data):
     return False
         
 if __name__ == "__main__":
-    # TODO: Add logging.
+    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', 
+                    datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
+
     import argparse
     parser = argparse.ArgumentParser(description="iDigi Push Client Sample", 
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
