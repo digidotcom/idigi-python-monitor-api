@@ -121,8 +121,6 @@ Posting an SCI Request to a Device:
 """
 
 import logging
-logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', 
-                    datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 log = logging.getLogger(__name__)
 
 import httplib, urllib
@@ -282,6 +280,8 @@ class Api:
                  hostname='developer.idigi.com', ws_root='/ws', 
                  content_type='text/xml', cst_id=None, usr_id=None):
         self.hostname = hostname
+        self.username = username
+        self.password = password
         self.ws_root = ws_root
         self.cst_id = cst_id
         self.usr_id = usr_id
@@ -556,13 +556,22 @@ class Api:
         ws_rate_plan = self.get_rate_plan('messaging', 
             'iDigi WebService messaging')
         
-        ws_contract_plan =RestResource.create('ContractPlan',
+        ws_contract_plan = RestResource.create('ContractPlan',
             rpAutoSubscribe='true',
             id = RestResource.create('id', rpId=ws_rate_plan.id.rpId,
                                         rpVersion='0'))
 
+        device_rate_plan = self.get_rate_plan('messaging',
+            'iDigi Device messaging')
+
+        device_contract_plan = RestResource.create('ContractPlan',
+            rpAutoSubscribe='true',
+            id = RestResource.create('id', rpId=device_rate_plan.id.rpId,
+                                        rpVersion='0'))
+
         contract_plans = RestResource.create('contractPlans', 
-            ContractPlan=[management_contract_plan, ws_contract_plan])
+            ContractPlan=[management_contract_plan, ws_contract_plan, 
+                device_contract_plan])
 
         service_contract = RestResource.create('ServiceContract', 
             scName=cust_uuid, contractPlans=contract_plans)
