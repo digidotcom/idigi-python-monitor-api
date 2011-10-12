@@ -152,8 +152,9 @@ not STATUS_OK (%d)." % STATUS_OK)
         Closes the socket associated with this session and puts Session 
         into a state such that it can be re-established later.
         """
-        self.socket.close()
-        self.socket = None
+        if self.socket is not None:
+            self.socket.close()
+            self.socket = None
 
 class SecurePushSession(PushSession):
     """
@@ -495,7 +496,7 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE))
 
         finally:
             for session in self.sessions.values():
-                session.stop()
+                if session is not None: session.stop()
     
     def __init_threads(self):
         # This is the first session, start the io_thread
