@@ -452,10 +452,13 @@ for Monitor %s." % session.monitor_id)
 PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE))
                             continue
 
-                        data = sck.recv(message_length)
+                        data = ""
                         while len(data) < message_length :
-                             time.sleep(1)
-                             data = data + sck.recv(message_length - len(data))
+                            time.sleep(0.01)
+                            try:
+                                data = data + sck.recv(message_length - len(data))
+                            except:
+                                pass
 
                         block_id = struct.unpack('!H', data[0:2])[0]
                         aggregate_count = struct.unpack('!H', data[2:4])[0]
@@ -554,8 +557,7 @@ def json_cb(data):
     """
     try:
         json_data = json.loads(data)
-        log.info("Data Received: %s" % (json.dumps(json_data, sort_keys=True, 
-                                        indent=4)))
+        log.info("Data Received")
         return True
     except Exception, e:
         print e
@@ -598,7 +600,7 @@ if __name__ == "__main__":
         help='A comma-separated list of topics to listen on.')
 
     parser.add_argument('--host', '-a', dest='host', action='store', 
-        type=str, default='test.idigi.com', 
+        type=str, default='devtest.idigi.com', 
         help='iDigi server to connect to.')
 
     parser.add_argument('--ca_certs', dest='ca_certs', action='store',
