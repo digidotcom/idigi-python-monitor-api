@@ -240,7 +240,7 @@ class CallbackWorkerPool(object):
             self.__queue.task_done()
 
 
-    def __init__(self, write_queue=None, size=1):
+    def __init__(self, write_queue=None, size=20):
         """
         Creates a Callback Worker Pool for use in invoking Session Callbacks 
         when data is received by a push client.
@@ -297,7 +297,7 @@ class PushClient(object):
                     iDigi Server must present a certificate present in the 
                     ca_certs file if 'secure' is specified to True.
         """
-        self.api      = Api(username, password, hostname)
+        self.api      = Api(username, password, 'tst-dev-cc-1.idigi.env')
         self.hostname = hostname
         self.username = username
         self.password = password
@@ -571,7 +571,7 @@ def json_cb(data):
     """
     try:
         json_data = json.loads(data)
-        log.info("Data Received")
+        log.info("Data Received %s" % json.dumps(json_data, sort_keys=True, indent=4))
         return True
     except Exception, e:
         print e
@@ -644,7 +644,7 @@ batchsize not met.')
         
     args = parser.parse_args()
     log.info("Creating Push Client.")
-    client = PushClient(args.username, args.password, hostname=args.host,
+    client = PushClient(args.username, args.password, hostname='tst-dev-cc-1.idigi.env',
                         secure=args.secure, ca_certs=args.ca_certs)
     
     topics = args.topics.split(',')
