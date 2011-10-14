@@ -297,7 +297,7 @@ class PushClient(object):
                     iDigi Server must present a certificate present in the 
                     ca_certs file if 'secure' is specified to True.
         """
-        self.api      = Api(username, password, 'tst-dev-cc-1.idigi.env')
+        self.api      = Api(username, password, hostname)
         self.hostname = hostname
         self.username = username
         self.password = password
@@ -644,7 +644,7 @@ batchsize not met.')
         
     args = parser.parse_args()
     log.info("Creating Push Client.")
-    client = PushClient(args.username, args.password, hostname='tst-dev-cc-1.idigi.env',
+    client = PushClient(args.username, args.password, hostname=args.host,
                         secure=args.secure, ca_certs=args.ca_certs)
     
     topics = args.topics.split(',')
