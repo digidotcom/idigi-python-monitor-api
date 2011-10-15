@@ -319,7 +319,7 @@ class PushClient(object):
 
 
     def create_monitor(self, topics, batch_size=1, batch_duration=0, 
-        compression='none', format_type='xml'):
+        compression='gzip', format_type='xml'):
         """
         Creates a Monitor instance in iDigi for a given list of topics.
         
@@ -626,7 +626,7 @@ if __name__ == "__main__":
         help='Prevent client from making secure (SSL) connection.')
 
     parser.add_argument('--compression', dest='compression', action='store',
-        type=str, default='none', choices=['none', 'gzip'],
+        type=str, default='gzip', choices=['none', 'gzip'],
         help='Compression type to use.')
 
     parser.add_argument('--format', dest='format', action='store',
