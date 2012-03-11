@@ -39,14 +39,14 @@ if __name__ == "__main__":
         help='The full device id of the device to capture tracing on.')
 
     parser.add_argument('--host', '-a', dest='host', action='store', 
-        type=str, default='devtest.idigi.com', 
+        type=str, default='test.idigi.com', 
         help='iDigi server to connect to.')
     
     args = parser.parse_args()
 
     client = push_client.PushClient(args.username, args.password, 
                         hostname=args.host,
-                        secure=True, ca_certs='../idigi.pem')
+                        secure=False, ca_certs='../idigi.pem')
 
     topics = ['FileData/~%%2F%s/trace.log' % args.device_id ]
 
@@ -71,4 +71,4 @@ if __name__ == "__main__":
     Closing Sessions and Cleaning Up.")
     finally:
         client.stop_all()
-        client.delete_monitor(monitor)
+        #client.delete_monitor(monitor)
