@@ -427,10 +427,11 @@ class PushClient(object):
             + encodestring('%s:%s' % (self.username,self.password))[:-1]
         }
 
-
-
-
     def get_http_connection(self):
+        """
+        Returns a HTTPConnection or HTTPSConnection (depending on whether or 
+        not secure is set) to be used for interfacing with iDigi web services.
+        """
         return httplib.HTTPSConnection(self.hostname) if self.secure \
             else httplib.HTTPConnection(self.hostname)
 
