@@ -752,7 +752,7 @@ def get_parser():
         help='A comma-separated list of topics to listen on.')
 
     parser.add_argument('--host', '-a', dest='host', action='store', 
-        type=str, default='devtest.idigi.com', 
+        type=str, default='developer.idigi.com', 
         help='iDigi server to connect to.')
 
     parser.add_argument('--ca_certs', dest='ca_certs', action='store',
