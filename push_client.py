@@ -1,21 +1,44 @@
-from idigi_ws_api import Api, RestResource
-from threading import Thread
-from xml.dom.minidom import parseString
-import socket, ssl, pprint, struct, time
+# -*- coding: utf-8 -*
+# Copyright (c) 2012 Digi International Inc., All Rights Reserved
+# 
+# This software contains proprietary and confidential information of Digi
+# International Inc.  By accepting transfer of this copy, Recipient agrees
+# to retain this software in confidence, to prevent disclosure to others,
+# and to make no use of this software other than that for which it was
+# delivered.  This is an published copyrighted work of Digi International
+# Inc.  Except as permitted by federal law, 17 USC 117, copying is strictly
+# prohibited.
+# 
+# Restricted Rights Legend
+#
+# Use, duplication, or disclosure by the Government is subject to
+# restrictions set forth in sub-paragraph (c)(1)(ii) of The Rights in
+# Technical Data and Computer Software clause at DFARS 252.227-7031 or
+# subparagraphs (c)(1) and (2) of the Commercial Computer Software -
+# Restricted Rights at 48 CFR 52.227-19, as applicable.
+#
+# Digi International Inc. 11001 Bren Road East, Minnetonka, MN 55343
+"""
+A Push Monitoring Client for subscribing to events that occur in 
+iDigi.
+"""
+import httplib
 import json
-import select
-import zlib
 import logging
-from Queue import Queue, Empty
+import socket, ssl, struct, time
+import select
+import urllib
+import zlib
 
-log = logging.getLogger(__name__)
-
-import httplib, urllib
 from base64 import encodestring
-from xml.dom.minidom import getDOMImplementation, parseString, Element
-import uuid, re
+from xml.dom.minidom import getDOMImplementation
+from Queue import Queue, Empty
+from threading import Thread
 
-import warnings
+LOG = logging.getLogger("push_client")
+
+# Dom Implementation to work with
+DOM = getDOMImplementation()
 
 # Push Opcodes.
 CONNECTION_REQUEST = 0x01
@@ -31,6 +54,73 @@ STATUS_BAD_REQUEST = 400
 # Ports to Connect on for Push.
 PUSH_OPEN_PORT = 3200
 PUSH_SECURE_PORT = 3201
+
+def _read_msg_header(sck):
+    """
+    Perform a read on input socket to consume headers and then return 
+    a tuple of message type, message length.
+
+    :param: sck: Socket to read from.
+    """
+    data = ""
+    while len(data) < 6 :
+        try:
+            new_data = sck.recv(6 - len(data))
+            if len(new_data) == 0:
+                break
+            data += new_data
+        except ssl.SSLError:
+            # This can happen when select gets triggered 
+            # for an SSL socket and data has not yet been 
+            # read.
+            time.sleep(.01)
+        except Exception:
+            break
+    
+    if len(data) < 6:
+        return (None, None)
+
+    response_type = struct.unpack('!H', data[0:2])[0]
+    message_length = struct.unpack('!i', data[2:6])[0]
+
+    return (response_type, message_length)
+
+def _read_msg(sck, message_length):
+    """
+    Perform a read on input socket to consume message and then return the
+    payload and block_id in a tuple.
+
+    :param: sck: Socket to read from.
+    :param: message_length: Expected length of the message.
+    """
+    data = ""
+    while len(data) < message_length:
+        try:
+            new_data = sck.recv(message_length - len(data))
+            if len(new_data) == 0:
+                break
+            data = data + new_data  
+        except ssl.SSLError:
+            # This can happen when select gets triggered 
+            # for an SSL socket and data has not yet been 
+            # read.
+            time.sleep(.01)
+        except Exception:
+            break
+
+    if len(data) < message_length:
+        return None
+
+    block_id = struct.unpack('!H', data[0:2])[0]
+    compression = struct.unpack('!B', data[4:5])[0]
+    payload = data[10:]
+
+    if compression == 0x01:
+        # Data is compressed, uncompress it.
+        # Note, this doesn't work yet.
+        payload = zlib.decompress(payload)
+
+    return (payload, block_id)
 
 class PushException(Exception):
     """
@@ -61,6 +151,7 @@ class PushSession(object):
         self.monitor_id = monitor_id
         self.client     = client
         self.socket     = None
+        self.log        = logging.getLogger("push_session[%s]" % monitor_id)
         
     def send_connection_request(self):
         """
@@ -69,7 +160,7 @@ class PushSession(object):
         member.
         """
         try:
-            log.info("Sending ConnectionRequest for Monitor %s." 
+            self.log.info("Sending ConnectionRequest for Monitor %s." 
                 % self.monitor_id)
             # Send connection request and perform a receive to ensure
             # request is authenticated.
@@ -117,22 +208,28 @@ class PushSession(object):
 ConnectionResponse Type (%d)." % (response_type, CONNECTION_RESPONSE))
 
             status_code = struct.unpack("!H", response[6:8])[0]
-            log.info("Got ConnectionResponse for Monitor %s with Status %s." 
+            self.log.info("Got ConnectionResponse for Monitor %s. Status %s." 
                 % (self.monitor_id, status_code))
             if status_code != STATUS_OK:
                 raise PushException("Connection Response Status Code (%d) is \
-not STATUS_OK (%d)." % STATUS_OK)
-        except Exception, e:
+not STATUS_OK (%d)." % (status_code, STATUS_OK))
+
+            # Add Incredibly arbitrary sleep as it takes ms for iDigi to 
+            # inform every member of Cluster that there is a new monitor
+            # session.
+            time.sleep(.5)
+        except Exception, exception:
             self.socket.close()
             self.socket = None
-            raise e
+            raise exception
 
     def start(self):
         """
         Creates a TCP connection to the iDigi Server and sends a 
         ConnectionRequest message.
         """
-        log.info("Starting Insecure Session for Monitor %s." % self.monitor_id)
+        self.log.info("Starting Insecure Session for Monitor %s." 
+            % self.monitor_id)
         if self.socket is not None:
             raise Exception("Socket already established for %s." % self)
         
@@ -140,10 +237,10 @@ not STATUS_OK (%d)." % STATUS_OK)
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((self.client.hostname, PUSH_OPEN_PORT))
             self.socket.setblocking(0)
-        except Exception, e:
+        except Exception, exception:
             self.socket.close()
             self.socket = None
-            raise e
+            raise exception
         
         self.send_connection_request()
             
@@ -188,7 +285,7 @@ class SecurePushSession(PushSession):
         Creates a SSL connection to the iDigi Server and sends a 
         ConnectionRequest message.
         """
-        log.info("Starting SSL Session for Monitor %s." % self.monitor_id)
+        self.log.info("Starting SSL Session for Monitor %s." % self.monitor_id)
         if self.socket is not None:
             raise Exception("Socket already established for %s." % self)
         
@@ -203,15 +300,12 @@ class SecurePushSession(PushSession):
             else:
                 self.socket = ssl.wrap_socket(self.socket)
 
-            # TODO (possibly) for some reason python can't parse the peer
-            # cert.  It would be really nice to assert that the hostname
-            # matches what we expect.
             self.socket.connect((self.client.hostname, PUSH_SECURE_PORT))
             self.socket.setblocking(0)
-        except Exception, e:
+        except Exception, exception:
             self.socket.close()
             self.socket = None
-            raise e
+            raise exception
             
         self.send_connection_request()
 
@@ -222,6 +316,11 @@ class CallbackWorkerPool(object):
     """
 
     def __consume_queue(self):
+        """
+        Continually blocks until data is on the internal queue, then calls 
+        the session's registered callback and sends a PublishMessageReceived 
+        if callback returned True.
+        """
         while True:
             session, block_id, data = self.__queue.get()
             try:
@@ -234,8 +333,8 @@ class CallbackWorkerPool(object):
                                             block_id, 200)
                         self.__write_queue.put((session.socket, 
                             response_message))
-            except Exception, e:
-                log.exception(e)
+            except Exception, exception:
+                self.log.exception(exception)
 
             self.__queue.task_done()
 
@@ -245,10 +344,9 @@ class CallbackWorkerPool(object):
         Creates a Callback Worker Pool for use in invoking Session Callbacks 
         when data is received by a push client.
 
-        Keyword Arguments:
-        write_queue -- Queue used for queueing up socket write events for when 
-                       a payload message is received and processed.
-        size        -- The number of worker threads to invoke callbacks.
+        :param write_queue: Queue used for queueing up socket write events 
+        for when a payload message is received and processed.
+        :param size: The number of worker threads to invoke callbacks.
         """
         # Used to queue up PublishMessageReceived events to be sent back to 
         # the iDigi server.
@@ -257,6 +355,7 @@ class CallbackWorkerPool(object):
         self.__queue = Queue(size)
         # Number of workers to create.
         self.size = size
+        self.log  = logging.getLogger('callback_worker_pool')
 
         for _ in range(size): 
             worker = Thread(target=self.__consume_queue)
@@ -268,12 +367,20 @@ class CallbackWorkerPool(object):
         Queues up a callback event to occur for a session with the given 
         payload data.  Will block if the queue is full.
 
-        Keyword Arguments:
-        session  -- the session with a defined callback function to call.
-        block_id -- the block_id of the message received.
-        data     -- the data payload of the message received.
+        :param session: the session with a defined callback function to call.
+        :param block_id: the block_id of the message received.
+        :param data: the data payload of the message received.
         """
         self.__queue.put((session, block_id, data))        
+
+def push_client(username, password, **kwargs):
+    """
+    Returns a :class:`PushClient` for context-management.
+
+    :param username: Username to authenticate with.
+    :param password: Password to authenticate with.
+    """
+    return PushClient(username, password, **kwargs)
 
 class PushClient(object):
     """
@@ -281,28 +388,24 @@ class PushClient(object):
     """
     
     def __init__(self, username, password, hostname='developer.idigi.com', 
-                secure=True, ca_certs=None):
+                secure=True, ca_certs=None, workers=1):
         """
         Creates a Push Client for use in creating monitors and creating sessions 
         for them.
         
-        Arguments:
-        username -- Username of user in iDigi to authenticate with.
-        password -- Password of user in iDigi to authenticate with.
-        
-        Keyword Arguments:
-        hostname -- Hostname of iDigi server to connect to.
-        secure   -- Whether or not to create a secure SSL wrapped session.
-        ca_certs -- Path to a file containing Certificates.  If not None,
-                    iDigi Server must present a certificate present in the 
-                    ca_certs file if 'secure' is specified to True.
+        :param username: Username of user in iDigi to authenticate with.
+        :param password: Password of user in iDigi to authenticate with.:
+        :param hostname: Hostname of iDigi server to connect to.
+        :param secure: Whether or not to create a secure SSL wrapped session.
+        :param ca_certs: Path to a file containing Certificates.  If not None, 
+        iDigi Server must present a certificate present in the ca_certs file 
+        if 'secure' is specified to True.
         """
-        self.api      = Api(username, password, hostname)
-        self.hostname = hostname
-        self.username = username
-        self.password = password
-        self.secure   = secure
-        self.ca_certs = ca_certs
+        self.hostname     = hostname
+        self.username     = username
+        self.password     = password
+        self.secure       = secure
+        self.ca_certs     = ca_certs
         
         # A dict mapping Sockets to their PushSessions
         self.sessions          = {}
@@ -313,9 +416,23 @@ class PushClient(object):
         # Write queue is used to queue up data to write to sockets.
         self.__write_queue     = Queue()
         # A pool that monitors callback events and invokes them.
-        self.__callback_pool   = CallbackWorkerPool(self.__write_queue)
+        self.__callback_pool   = CallbackWorkerPool(self.__write_queue, 
+                                                    size=workers)
 
         self.closed            = False
+        self.log               = logging.getLogger('push_client')
+
+        self.headers           = {
+            'Authorization': 'Basic ' \
+            + encodestring('%s:%s' % (self.username,self.password))[:-1]
+        }
+
+
+
+
+    def get_http_connection(self):
+        return httplib.HTTPSConnection(self.hostname) if self.secure \
+            else httplib.HTTPConnection(self.hostname)
 
 
     def create_monitor(self, topics, batch_size=1, batch_duration=0, 
@@ -335,33 +452,62 @@ class PushClient(object):
         format_type    -- What format server should send data in (i.e. 'xml' or 
                           'json').
         
-        Returns a Monitor RestResource object.
+        Returns a string of the created Monitor Id (i.e. 9001)
         """
-        
-        # Create RestResource and POST it.
-        monitor = RestResource.create('Monitor', monTopic=','.join(topics), 
-                                        monBatchSize=str(batch_size),
-                                        monBatchDuration=str(batch_duration),
-                                        monFormatType=format_type,
-                                        monTransportType='tcp',
-                                        monCompression=compression)
-        location = self.api.post(monitor)
-        
-        # Perform a GET by Id to get all Monitor data.
-        monitor = self.api.get_first(location)
-        # Set the location so it can be used for future reference.
-        monitor.location = location
-        return monitor
-    
-    def delete_monitor(self, monitor):
+        # Create Monitor Request XML.
+        monitor_req = DOM.createDocument(None, "Monitor", None)
+        root = monitor_req.documentElement
+
+        attrs = { 'monTopic' : ','.join(topics), 
+                    'monBatchSize' : str(batch_size),
+                    'monBatchDuration' : str(batch_duration),
+                    'monFormatType' : format_type,
+                    'monTransportType' : 'tcp',
+                    'monCompression' : compression }
+
+        for element, value in attrs.items():
+            el = monitor_req.createElement(element)
+            el.appendChild(monitor_req.createTextNode(value))
+            root.appendChild(el)
+
+        request = root.toxml()
+
+        # POST Monitor Request.
+        connection = self.get_http_connection()
+        connection.request('POST', '/ws/Monitor', request, 
+                                        self.headers)
+        response = connection.getresponse()
+        try:
+            if response.status == 201:
+                location = response.getheader('location').split('/')[-1]
+                return location
+            else:
+                raise Exception("Monitor Could not be Created (%d): %s" \
+                    % (response.status, response.read()))
+        finally:
+            connection.close()
+
+
+    def delete_monitor(self, monitor_id):
         """
         Attempts to Delete a Monitor from iDigi.  Throws exception if 
         Monitor does not exist.
         
         Arguments:
-        monitor -- RestResource representing the monitor to delete.
+        monitor_id -- id of the Monitor (i.e. 1000).
         """
-        self.api.delete(monitor)
+
+        connection = self.get_http_connection()
+        connection.request('DELETE', '/ws/Monitor/%s' % monitor_id, 
+                            headers=self.headers)
+        response = connection.getresponse()
+
+        try:
+            if response.status != 200:
+                raise Exception("Monitor Could not be Deleted (%s): %s" \
+                    % (response.status, response.read()))
+        finally:
+            connection.close()
         
     def get_monitor(self, topics):
         """
@@ -372,14 +518,33 @@ class PushClient(object):
         topics -- a string list of topics 
                   (i.e. ['DeviceCore[U]', 'FileDataCore']).
         
-        Returns a RestResource Monitor instance if match found, otherwise None.
+        Returns a monitor ID if found, otherwise None.
         """
         # Query for Monitor conditionally by monTopic.
-        monitor = self.api.get_first('Monitor', 
-            condition="monTopic='%s'" % ','.join(topics))
-        if monitor is not None:
-            monitor.location = 'Monitor/%s' % monitor.monId
-        return monitor
+        params = {'condition' : "monTopic='%s'" % ','.join(topics)}
+        url = '/ws/Monitor/.json?' + urllib.urlencode([(key,params[key]) \
+            for key in params])
+        
+        connection = self.get_http_connection()
+        connection.request('GET', url, headers=self.headers)
+
+        response = connection.getresponse()
+
+        try:
+            content = response.read()
+
+            if response.status != 200:
+                raise Exception("Monitor Could not be Retrieved (%s): %s" \
+                    % (response.status, content))
+
+            monitor_data = json.loads(content)
+
+            # If no matching Monitor found, return None.
+            if monitor_data['resultSize'] == '0': return None
+            # Otherwise grab the first found monitor's id.
+            return monitor_data['items'][0]['monId']
+        finally:
+            connection.close()
         
     def __restart_session(self, session):
         """
@@ -388,13 +553,15 @@ class PushClient(object):
         Arguments:
         session -- The session to restart.
         """
-        log.info("Attempting restart session for Monitor Id %s."
+        # remove old session key, if socket is None, that means the
+        # session was closed by user and there is no need to restart.
+        if session.socket is not None:
+            self.log.info("Attempting restart session for Monitor Id %s."
              % session.monitor_id)
-        # remove old session key
-        del self.sessions[session.socket.fileno()]
-        session.stop()
-        session.start()
-        self.sessions[session.socket.fileno()] = session
+            del self.sessions[session.socket.fileno()]
+            session.stop()
+            session.start()
+            self.sessions[session.socket.fileno()] = session
 
     def __writer(self):
         """
@@ -403,10 +570,10 @@ class PushClient(object):
         """
         while not self.closed:
             try:
-                socket, data = self.__write_queue.get(timeout=0.1)
-                socket.send(data)
+                sock, data = self.__write_queue.get(timeout=0.1)
+                sock.send(data)
                 self.__write_queue.task_done()
-            except Empty,e:
+            except Empty:
                 pass # nothing to write after timeout
 
     def __select(self):
@@ -419,87 +586,64 @@ class PushClient(object):
         try:
             while not self.closed:
                 try:
-                    # TODO if any of the descriptors become bad
-                    # (This can happen if session is stopped) remove
-                    # it from sessions.
-                    inputready, outputready, exceptready =\
-                        select.select(self.sessions.keys(), [], [], 0.1)
+                    inputready = \
+                        select.select(self.sessions.keys(), [], [], 0.1)[0]
+
                     for sock in inputready:
                         session = self.sessions[sock]
                         sck = session.socket
                         
                         # Read header information before receiving rest of
                         # message.
-                        data = ""
-                        try:
-                            data = data + sck.recv(6)
-                        except:
-                            pass
-                        while len(data) < 6 :
-                            time.sleep(0.01)
-                            try:
-                                data = data + sck.recv(6 - len(data))
-                            except:
-                                pass
-                        
-                        # check for socket close event
-                        if len(data) == 0:
-                            if not self.sessions.has_key(session):
-                                # Session no longer tracked, dont restart.
-                                continue
-                            # Attempt to Restart Session
-                            log.error("Socket closed for Monitor %s." 
-                                % session.monitor_id)
-                            log.warn("Restarting Session \
-for Monitor %s." % session.monitor_id)
-                            self.__restart_session(session) 
-                            continue
+                        (response_type, message_length) = _read_msg_header(sck)
 
-                        response_type = struct.unpack('!H', data[0:2])[0]
-                        message_length = struct.unpack('!i', data[2:6])[0]
+                        if response_type is None:
+                            # Data could not be read, assume socket closed.
+                            if session.socket is not None:
+                                self.log.error("Socket closed for " \
+                                    "Monitor %s." % session.monitor_id)
+                                self.__restart_session(session) 
+                            continue
                         
                         if response_type != PUBLISH_MESSAGE:
-                            log.warn("Response Type (%x) does not match \
-PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE))
+                            self.log.warn("Response Type (%x) does not match " \
+                                "PublishMessageReceived (%x)" \
+                                % (response_type, PUBLISH_MESSAGE))
                             continue
-                        data = ""
-                        try:
-                            data = data + sck.recv(message_length - len(data))
-                        except:
-                            pass
-                        while len(data) < message_length :
-                            time.sleep(0.01)
-                            try:
-                                data = data + sck.recv(message_length - len(data))
-                            except:
-                                pass
 
-                        block_id = struct.unpack('!H', data[0:2])[0]
-                        aggregate_count = struct.unpack('!H', data[2:4])[0]
-                        compression = struct.unpack('!B', data[4:5])[0]
-                        format = struct.unpack('!B', data[5:6])[0]
-                        payload_size = struct.unpack('!i', data[6:10])
-                        payload = data[10:]
-
-                        if compression == 0x01:
-                            # Data is compressed, uncompress it.
-                            # Note, this doesn't work yet.
-                            payload = zlib.decompress(payload)
+                        (payload, block_id) = _read_msg(sck, message_length)
                         
-                        # Enqueue payload into a callback queue to be
-                        # invoked.
-                        self.__callback_pool.queue_callback(session, 
-                            block_id, payload)
-                        
-                except Exception, ex:
-                    log.exception(ex)
+                        # If payload is None, message was malformed or socket 
+                        # was closed, in this case, skip queuing and assume 
+                        # socket was closed.
+                        if payload is not None:
+                            # Enqueue payload into a callback queue to be
+                            # invoked.
+                            self.__callback_pool.queue_callback(session, 
+                                block_id, payload)
+                        else:
+                            # If payload is less than the message length, 
+                            # assume socket closed.
+                            if session.socket is not None:
+                                self.log.error("Socket closed for " \
+                                    "Monitor %s." % session.monitor_id)
+                                self.__restart_session(session)
+                except Exception:
+                    # Evaluate sessions, if socket is gone delete the session.
+                    for sck in self.sessions.keys():
+                        session = self.sessions[sck]
+                        if session.socket is None:
+                            del self.sessions[sck]
 
         finally:
             for session in self.sessions.values():
-                if session is not None: session.stop()
+                if session is not None: 
+                    session.stop()
     
     def __init_threads(self):
-        # This is the first session, start the io_thread
+        """
+        Initializes the IO and Writer threads
+        """
         if self.__io_thread is None:
             self.__io_thread = Thread(target=self.__select)
             self.__io_thread.start()
@@ -509,7 +653,7 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE))
             self.__writer_thread.start()
 
            
-    def create_session(self, callback, monitor=None, monitor_id=None):
+    def create_session(self, callback, monitor_id):
         """
         Creates and Returns a PushSession instance based on the input monitor
         and callback.  When data is received, callback will be invoked.
@@ -521,23 +665,12 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE))
                     payload of the pushed message.  Additionally, expects 
                     function to return True if callback was able to process 
                     the message, False or None otherwise.
-        
-        Keyword Arguments:
-        monitor    -- Monitor RestResource instance that will be registered on.
-        monitor_id -- The id of the Monitor as id knows it, will be queried 
+        monitor_id -- The id of the Monitor, will be queried 
                       to understand parameters of the monitor.
         """
-        if monitor is None and monitor_id is None:
-            raise PushException('monitor or monitor_id must be provided.')
-
-        # If monitor_id is not set, monitor must have been set, get it's monId.
-        mon_id = monitor_id
-        if mon_id is None:
-            mon_id = monitor.monId
-
-        log.info("Creating Session for Monitor %s." % mon_id)
-        session = SecurePushSession(callback, mon_id, self, self.ca_certs) \
-            if self.secure else PushSession(callback, mon_id, self)
+        self.log.info("Creating Session for Monitor %s." % monitor_id)
+        session = SecurePushSession(callback, monitor_id, self, self.ca_certs) \
+            if self.secure else PushSession(callback, monitor_id, self)
 
         session.start()
         self.sessions[session.socket.fileno()] = session
@@ -550,16 +683,20 @@ PublishMessageReceived (%x)" % (response_type, PUBLISH_MESSAGE))
         Stops all session activity.  Blocks until io and writer thread dies.
         """
         if self.__io_thread is not None:
+            self.log.info("Waiting for I/O thread to stop...")
             self.closed = True
             
             while self.__io_thread.is_alive():
                 time.sleep(1)
 
         if self.__writer_thread is not None:
+            self.log.info("Waiting for Writer Thread to stop...")
             self.closed = True
 
             while self.__writer_thread.is_alive():
                 time.sleep(1)
+
+        self.log.info("All worker threads stopped.")
 
 def json_cb(data):
     """
@@ -571,10 +708,12 @@ def json_cb(data):
     """
     try:
         json_data = json.loads(data)
-        log.info("Data Received %s" % json.dumps(json_data, sort_keys=True, indent=4))
+        LOG.info("Data Received %s" % json.dumps(json_data, sort_keys=True, 
+                    indent=4))
         return True
-    except Exception, e:
-        print e
+    except Exception, exception:
+        print exception
+
     return False
 
 def xml_cb(data):
@@ -590,19 +729,17 @@ def xml_cb(data):
         print "Data Received: %s" % (dom.toprettyxml())
 
         return True
-    except Exception, e:
-        print e
+    except Exception, exception:
+        print exception
     
     return False
-        
-if __name__ == "__main__":
-    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', 
-                    datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
 
+def get_parser():
+    """ Parser for this script """
     import argparse
     parser = argparse.ArgumentParser(description="iDigi Push Client Sample", 
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    
+
     parser.add_argument('username', type=str,
         help='Username to authenticate with.')
 
@@ -639,37 +776,46 @@ if __name__ == "__main__":
 
     parser.add_argument('--batchduration', dest='batchduration', action='store',
         type=int, default=60,
-        help='Number of seconds to wait before sending batch if \
-batchsize not met.')
-        
-    args = parser.parse_args()
-    log.info("Creating Push Client.")
-    client = PushClient(args.username, args.password, hostname=args.host,
-                        secure=args.secure, ca_certs=args.ca_certs)
+        help='Seconds to wait before sending batch if batchsize not met.')
     
+    return parser
+
+def main():
+    """ Main function call """
+    args = get_parser().parse_args()
+    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', 
+                datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
+    LOG.info("Creating Push Client.")
+    client = push_client(args.username, args.password, hostname=args.host,
+                        secure=args.secure, ca_certs=args.ca_certs)
+
     topics = args.topics.split(',')
 
-    log.info("Checking to see if Monitor Already Exists.")
-    monitor = client.get_monitor(topics)
+    LOG.info("Checking to see if Monitor Already Exists.")
+    monitor_id = client.get_monitor(topics)
 
     # Delete Monitor if it Exists.
-    if monitor is not None:
-        log.info("Monitor already exists, deleting it.")
-        client.delete_monitor(monitor)
-    
-    monitor = client.create_monitor(topics, format_type=args.format,
+    if monitor_id is not None:
+        LOG.info("Monitor already exists, deleting it.")
+        client.delete_monitor(monitor_id)
+
+    monitor_id = client.create_monitor(topics, format_type=args.format,
         compression=args.compression, batch_size=args.batchsize, 
         batch_duration=args.batchduration)
 
     try:
-        callback = json_cb if args.format=="json" else xml_cb
-        session = client.create_session(callback, monitor)
+        callback = json_cb if args.format == "json" else xml_cb
+        client.create_session(callback, monitor_id)
         while True:
             time.sleep(3.14)
     except KeyboardInterrupt:
         # Expect KeyboardInterrupt (CTRL+C or CTRL+D) and print friendly msg.
-        log.warn("Keyboard Interrupt Received.  \
-Closing Sessions and Cleaning Up.")
+        LOG.warn("Closing Sessions and Cleaning Up.")
     finally:
         client.stop_all()
-        client.delete_monitor(monitor)
+        LOG.info("Deleting Monitor %s." % monitor_id)
+        client.delete_monitor(monitor_id)
+        LOG.info("Done")
+
+if __name__ == "__main__":
+    main()
