@@ -31,7 +31,7 @@ import urllib
 import zlib
 
 from base64 import encodestring
-from xml.dom.minidom import getDOMImplementation
+from xml.dom.minidom import getDOMImplementation, parseString
 from Queue import Queue, Empty
 from threading import Thread
 
