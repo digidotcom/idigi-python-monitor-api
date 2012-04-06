@@ -117,7 +117,6 @@ def _read_msg(sck, message_length):
 
     if compression == 0x01:
         # Data is compressed, uncompress it.
-        # Note, this doesn't work yet.
         payload = zlib.decompress(payload)
 
     return (payload, block_id)
