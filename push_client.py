@@ -22,6 +22,7 @@
 A Push Monitoring Client for subscribing to events that occur in 
 iDigi.
 """
+import errno
 import httplib
 import json
 import logging
@@ -74,8 +75,6 @@ def _read_msg_header(sck):
             # for an SSL socket and data has not yet been 
             # read.
             time.sleep(.01)
-        except Exception:
-            break
     
     if len(data) < 6:
         return (None, None)
@@ -85,41 +84,31 @@ def _read_msg_header(sck):
 
     return (response_type, message_length)
 
-def _read_msg(sck, message_length):
+def _read_msg(session):
     """
     Perform a read on input socket to consume message and then return the
     payload and block_id in a tuple.
 
-    :param: sck: Socket to read from.
-    :param: message_length: Expected length of the message.
+    :param: session: Push Session to read data for.
     """
-    data = ""
-    while len(data) < message_length:
-        try:
-            new_data = sck.recv(message_length - len(data))
-            if len(new_data) == 0:
-                break
-            data = data + new_data  
-        except ssl.SSLError:
-            # This can happen when select gets triggered 
-            # for an SSL socket and data has not yet been 
-            # read.
-            time.sleep(.01)
-        except Exception:
-            break
+    message_length = session.data[0]
+    if len(session.data[1]) == message_length:
+        # Data Already completely read.  Return
+        return True
 
-    if len(data) < message_length:
-        return None
+    try:
+        new_data = session.socket.recv(message_length - len(session.data[1]))
+        if len(new_data) == 0:
+            raise PushException("No Data on Socket!")
+        session.data[1] += new_data  
+    except ssl.SSLError:
+        # This can happen when select gets triggered 
+        # for an SSL socket and data has not yet been 
+        # read.  Wait for it to get triggered again.
+        return False
 
-    block_id = struct.unpack('!H', data[0:2])[0]
-    compression = struct.unpack('!B', data[4:5])[0]
-    payload = data[10:]
-
-    if compression == 0x01:
-        # Data is compressed, uncompress it.
-        payload = zlib.decompress(payload)
-
-    return (payload, block_id)
+    # Whether or not all data was read.
+    return  len(session.data[1]) == session.data[0]
 
 class PushException(Exception):
     """
@@ -146,11 +135,12 @@ class PushSession(object):
         monitor_id -- The id of the Monitor to observe.
         client     -- The client object this session is derived from.
         """
-        self.callback   = callback
-        self.monitor_id = monitor_id
-        self.client     = client
-        self.socket     = None
-        self.log        = logging.getLogger("push_session[%s]" % monitor_id)
+        self.callback    = callback
+        self.monitor_id  = monitor_id
+        self.client      = client
+        self.socket      = None
+        self.log         = logging.getLogger("push_session[%s]" % monitor_id)
+        self.data        = None
         
     def send_connection_request(self):
         """
@@ -186,9 +176,9 @@ class PushSession(object):
             # Send Connection Request.
             self.socket.send(data)
 
-            # Set a 10 second blocking on recv, if we don't get any data
-            # within 10 seconds, timeout which will throw an exception.
-            self.socket.settimeout(10)
+            # Set a 60 second blocking on recv, if we don't get any data
+            # within 60 seconds, timeout which will throw an exception.
+            self.socket.settimeout(60)
 
             # Should receive 10 bytes with ConnectionResponse.
             response = self.socket.recv(10)
@@ -251,6 +241,7 @@ not STATUS_OK (%d)." % (status_code, STATUS_OK))
         if self.socket is not None:
             self.socket.close()
             self.socket = None
+            self.data = None
 
 class SecurePushSession(PushSession):
     """
@@ -571,10 +562,24 @@ class PushClient(object):
         while not self.closed:
             try:
                 sock, data = self.__write_queue.get(timeout=0.1)
-                sock.send(data)
                 self.__write_queue.task_done()
+                sock.send(data)
             except Empty:
                 pass # nothing to write after timeout
+            except socket.error, e:
+                if e.errno == errno.EBADF:
+                    self.__clean_dead_sessions()
+
+    def __clean_dead_sessions(self):
+        """
+        Traverses sessions to determine if any sockets
+        were removed (indicates a stopped session).  
+        In these cases, remove the session.
+        """
+        for sck in self.sessions.keys():
+            session = self.sessions[sck]
+            if session.socket is None:
+                del self.sessions[sck]
 
     def __select(self):
         """
@@ -588,53 +593,73 @@ class PushClient(object):
                 try:
                     inputready = \
                         select.select(self.sessions.keys(), [], [], 0.1)[0]
-
                     for sock in inputready:
                         session = self.sessions[sock]
                         sck = session.socket
                         
-                        # Read header information before receiving rest of
-                        # message.
-                        (response_type, message_length) = _read_msg_header(sck)
-
-                        if response_type is None:
-                            # Data could not be read, assume socket closed.
-                            if session.socket is not None:
-                                self.log.error("Socket closed for " \
-                                    "Monitor %s." % session.monitor_id)
-                                self.__restart_session(session) 
-                            continue
-                        
-                        if response_type != PUBLISH_MESSAGE:
-                            self.log.warn("Response Type (%x) does not match " \
-                                "PublishMessageReceived (%x)" \
-                                % (response_type, PUBLISH_MESSAGE))
+                        if sck is None:
+                            # Socket has since been deleted, continue
                             continue
 
-                        (payload, block_id) = _read_msg(sck, message_length)
+                        # If no session data this is a new message, parse the header.
+                        if session.data is None:
+                            # Read header information before receiving rest of
+                            # message.
+                            (response_type, message_length) = _read_msg_header(sck)
+                            if response_type is None:
+                                # Data could not be read, assume socket closed.
+                                if session.socket is not None:
+                                    self.log.error("Socket closed for " \
+                                        "Monitor %s." % session.monitor_id)
+                                    self.__restart_session(session)
+                                continue
                         
-                        # If payload is None, message was malformed or socket 
-                        # was closed, in this case, skip queuing and assume 
-                        # socket was closed.
-                        if payload is not None:
-                            # Enqueue payload into a callback queue to be
-                            # invoked.
-                            self.__callback_pool.queue_callback(session, 
-                                block_id, payload)
-                        else:
-                            # If payload is less than the message length, 
-                            # assume socket closed.
-                            if session.socket is not None:
-                                self.log.error("Socket closed for " \
-                                    "Monitor %s." % session.monitor_id)
+                            if response_type != PUBLISH_MESSAGE:
+                                self.log.warn("Response Type (%x) does not match " \
+                                    "PublishMessage (%x)" \
+                                    % (response_type, PUBLISH_MESSAGE))
+                                continue
+
+                            session.data = [message_length, ""]
+
+                        try:
+                            if not _read_msg(session):
+                                # Data not completely read, continue.
+                                continue
+                        except PushException, e:
+                            # If Socket is None, it was closed,
+                            # otherwise it was closed when it shouldn't have been
+                            # restart it.
+                            session.data = None
+                            if session.socket is None:
+                                del self.sessions[sck]
+                            else:
+                                self.log.exception(e)	
                                 self.__restart_session(session)
-                except Exception:
-                    # Evaluate sessions, if socket is gone delete the session.
-                    for sck in self.sessions.keys():
-                        session = self.sessions[sck]
-                        if session.socket is None:
-                            del self.sessions[sck]
+                            continue
 
+                        # We received full payload, clear session data and parse it.
+                        data = session.data[1]
+                        session.data = None
+                        block_id = struct.unpack('!H', data[0:2])[0]
+                        compression = struct.unpack('!B', data[4:5])[0]
+                        payload = data[10:]
+
+                        if compression == 0x01:
+                            # Data is compressed, uncompress it.
+                            payload = zlib.decompress(payload)
+                       
+                        # Enqueue payload into a callback queue to be
+                        # invoked.
+                        self.__callback_pool.queue_callback(session, 
+                            block_id, payload)
+                except select.error, e:
+                    # Evaluate sessions if we get a bad file descriptor, if 
+                    # socket is gone, delete the session.
+                    if e.args[0] == errno.EBADF:
+                        self.__clean_dead_sessions()
+                except Exception,e:
+                    self.log.exception(e)
         finally:
             for session in self.sessions.values():
                 if session is not None: 
