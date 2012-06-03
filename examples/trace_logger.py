@@ -47,7 +47,7 @@ def syslog_server():
 
                     trace_cache.write(payload)
                 
-                if(math.fabs(time.clock() - last_write)) > 10:
+                if(math.fabs(time.clock() - last_write)) > 60:
                     flush_trace_cache(trace_cache)
                     last_write = time.clock()
         except Exception, e:

@@ -1,42 +1,42 @@
-# -*- coding: utf-8 -*
-# Copyright (c) 2012 Digi International Inc., All Rights Reserved
+# ***************************************************************************
+# Copyright (c) 2012 Digi International Inc.,
+# All rights not expressly granted are reserved.
 # 
-# This software contains proprietary and confidential information of Digi
-# International Inc.  By accepting transfer of this copy, Recipient agrees
-# to retain this software in confidence, to prevent disclosure to others,
-# and to make no use of this software other than that for which it was
-# delivered.  This is an published copyrighted work of Digi International
-# Inc.  Except as permitted by federal law, 17 USC 117, copying is strictly
-# prohibited.
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this file,
+# You can obtain one at http://mozilla.org/MPL/2.0/.
 # 
-# Restricted Rights Legend
-#
-# Use, duplication, or disclosure by the Government is subject to
-# restrictions set forth in sub-paragraph (c)(1)(ii) of The Rights in
-# Technical Data and Computer Software clause at DFARS 252.227-7031 or
-# subparagraphs (c)(1) and (2) of the Commercial Computer Software -
-# Restricted Rights at 48 CFR 52.227-19, as applicable.
-#
 # Digi International Inc. 11001 Bren Road East, Minnetonka, MN 55343
+#
+# ***************************************************************************
 """
+iDigi Monitor API Library for Python
+
 A Push Monitoring Client for subscribing to events that occur in 
 iDigi.
 """
+import base64
 import errno
 import httplib
 import json
 import logging
-import socket, ssl, struct, time
+import os
+import socket
 import select
+import ssl
+import struct
+import time
 import urllib
 import zlib
 
-from base64 import encodestring
-from xml.dom.minidom import getDOMImplementation, parseString
+from xml.dom.minidom import getDOMImplementation
 from Queue import Queue, Empty
 from threading import Thread
 
-LOG = logging.getLogger("push_client")
+LOG = logging.getLogger("idigi_monitor_api")
+
+# Resolve modules local directory and get reference to default iDigi Cert.
+IDIGI_CRT = os.path.join(os.path.dirname(__file__), "idigi.crt")
 
 # Dom Implementation to work with
 DOM = getDOMImplementation()
@@ -47,6 +47,11 @@ CONNECTION_RESPONSE = 0x02
 PUBLISH_MESSAGE = 0x03
 PUBLISH_MESSAGE_RECEIVED = 0x04
 
+# Data has not been completely read.
+INCOMPLETE = -1
+# No Data Received on Socket.
+NO_DATA = -2
+
 # Possible Responses from iDigi with respect to Push.
 STATUS_OK = 200
 STATUS_UNAUTHORIZED = 403
@@ -56,51 +61,70 @@ STATUS_BAD_REQUEST = 400
 PUSH_OPEN_PORT = 3200
 PUSH_SECURE_PORT = 3201
 
-def _read_msg_header(sck):
+def push_client(username, password, **kwargs):
+    """
+    Constructs and returns a :class:`PushClient` instance.  Which can be 
+    used for creating and deleting monitors, and starting a push monitor 
+    session.
+
+    :param username: Username to authenticate with.
+    :param password: Password to authenticate with.
+    :param hostname: Hostname of iDigi server to connect to.
+    :param secure: Whether or not to create a secure SSL wrapped session.
+    :param ca_certs: Path to a file containing Certificates.  If not provided, 
+        the idigi.crt file provided with the module will be used.  In most 
+        cases, the idigi.crt file should be acceptable.
+    """
+    return PushClient(username, password, **kwargs)
+
+def _read_msg_header(session):
     """
     Perform a read on input socket to consume headers and then return 
     a tuple of message type, message length.
 
-    :param: sck: Socket to read from.
+    :param session: Push Session to read data for.
+
+    Returns response type (i.e. PUBLISH_MESSAGE) if header was completely 
+    read, otherwise None if header was not completely read.
     """
-    data = ""
-    while len(data) < 6 :
-        try:
-            new_data = sck.recv(6 - len(data))
-            if len(new_data) == 0:
-                break
-            data += new_data
-        except ssl.SSLError:
-            # This can happen when select gets triggered 
-            # for an SSL socket and data has not yet been 
-            # read.
-            time.sleep(.01)
-    
-    if len(data) < 6:
-        return (None, None)
+    try:
+        data = session.socket.recv(6 - len(session.data))
+        if len(data) == 0: # No Data on Socket. Likely closed.
+            return NO_DATA
+        session.data += data
+        # Data still not completely read.
+        if len(session.data) < 6:
+            return INCOMPLETE
 
-    response_type = struct.unpack('!H', data[0:2])[0]
-    message_length = struct.unpack('!i', data[2:6])[0]
+    except ssl.SSLError:
+        # This can happen when select gets triggered 
+        # for an SSL socket and data has not yet been 
+        # read.
+        return INCOMPLETE
 
-    return (response_type, message_length)
+    session.message_length = struct.unpack('!i', session.data[2:6])[0]
+    response_type = struct.unpack('!H', session.data[0:2])[0]
+
+    # Clear out session data as header is consumed.
+    session.data = ""
+    return response_type
 
 def _read_msg(session):
     """
     Perform a read on input socket to consume message and then return the
     payload and block_id in a tuple.
 
-    :param: session: Push Session to read data for.
+    :param session: Push Session to read data for.
     """
-    message_length = session.data[0]
-    if len(session.data[1]) == message_length:
+    if len(session.data) == session.message_length:
         # Data Already completely read.  Return
         return True
 
     try:
-        new_data = session.socket.recv(message_length - len(session.data[1]))
-        if len(new_data) == 0:
+        data = session.socket.recv(session.message_length - len(session.data))
+        if len(data) == 0:
             raise PushException("No Data on Socket!")
-        session.data[1] += new_data  
+        session.data += data  
     except ssl.SSLError:
         # This can happen when select gets triggered 
         # for an SSL socket and data has not yet been 
@@ -108,7 +132,7 @@ def _read_msg(session):
         return False
 
     # Whether or not all data was read.
-    return  len(session.data[1]) == session.data[0]
+    return  len(session.data) == session.message_length
 
 class PushException(Exception):
     """
@@ -128,19 +152,20 @@ class PushSession(object):
         Creates a PushSession for use with interacting with iDigi's
         Push Functionality.
         
-        Arguments:
-        callback   -- The callback function to invoke when data is received.  
-                      Must have 1 required parameter that will contain the
-                      payload.
-        monitor_id -- The id of the Monitor to observe.
-        client     -- The client object this session is derived from.
+        :param callback: The callback function to invoke when data received.  
+            Must have 1 required parameter that will contain the payload.
+        :param monitor_id: The id of the Monitor to observe.
+        :param client: The client object this session is derived from.
         """
         self.callback    = callback
         self.monitor_id  = monitor_id
         self.client      = client
         self.socket      = None
         self.log         = logging.getLogger("push_session[%s]" % monitor_id)
-        self.data        = None
+
+        # Received protocol data holders.
+        self.data           = ""
+        self.message_length = 0
         
     def send_connection_request(self):
         """
@@ -268,7 +293,9 @@ class SecurePushSession(PushSession):
                     ca_certs file.
         """
         PushSession.__init__(self, callback, monitor_id, client)
-        self.ca_certs = ca_certs
+        # Fall back on idigi.crt in the same path as this module if not 
+        # specified.
+        self.ca_certs = ca_certs if ca_certs is not None else IDIGI_CRT
     
     def start(self):
         """
@@ -329,13 +356,13 @@ class CallbackWorkerPool(object):
             self.__queue.task_done()
 
 
-    def __init__(self, write_queue=None, size=20):
+    def __init__(self, write_queue=None, size=1):
         """
         Creates a Callback Worker Pool for use in invoking Session Callbacks 
         when data is received by a push client.
 
         :param write_queue: Queue used for queueing up socket write events 
-        for when a payload message is received and processed.
+            for when a payload message is received and processed.
         :param size: The number of worker threads to invoke callbacks.
         """
         # Used to queue up PublishMessageReceived events to be sent back to 
@@ -361,16 +388,7 @@ class CallbackWorkerPool(object):
         :param block_id: the block_id of the message received.
         :param data: the data payload of the message received.
         """
-        self.__queue.put((session, block_id, data))        
-
-def push_client(username, password, **kwargs):
-    """
-    Returns a :class:`PushClient` for context-management.
-
-    :param username: Username to authenticate with.
-    :param password: Password to authenticate with.
-    """
-    return PushClient(username, password, **kwargs)
+        self.__queue.put((session, block_id, data))
 
 class PushClient(object):
     """
@@ -383,13 +401,14 @@ class PushClient(object):
         Creates a Push Client for use in creating monitors and creating sessions 
         for them.
         
-        :param username: Username of user in iDigi to authenticate with.
-        :param password: Password of user in iDigi to authenticate with.:
+        :param username: Username to authenticate with.
+        :param password: Password to authenticate with.
         :param hostname: Hostname of iDigi server to connect to.
         :param secure: Whether or not to create a secure SSL wrapped session.
-        :param ca_certs: Path to a file containing Certificates.  If not None, 
-        iDigi Server must present a certificate present in the ca_certs file 
-        if 'secure' is specified to True.
+        :param ca_certs: Path to a file containing Certificates.  
+            If not provided, the idigi.crt file provided with the module will 
+            be used.  In most cases, the idigi.crt file should be acceptable.
+        :param workers: Number of workers threads to process callback calls.
         """
         self.hostname     = hostname
         self.username     = username
@@ -414,7 +433,7 @@ class PushClient(object):
 
         self.headers           = {
             'Authorization': 'Basic ' \
-            + encodestring('%s:%s' % (self.username,self.password))[:-1]
+            + base64.encodestring('%s:%s' % (self.username,self.password))[:-1]
         }
 
     def get_http_connection(self):
@@ -601,26 +620,27 @@ class PushClient(object):
                             # Socket has since been deleted, continue
                             continue
 
-                        # If no session data this is a new message, parse the header.
-                        if session.data is None:
+                        # If no defined message length, nothing has been 
+                        # consumed yet, parse the header.
+                        if session.message_length == 0:
                             # Read header information before receiving rest of
                             # message.
-                            (response_type, message_length) = _read_msg_header(sck)
-                            if response_type is None:
-                                # Data could not be read, assume socket closed.
+                            response_type = _read_msg_header(session)
+                            if response_type == NO_DATA:
+                                # No data could be read, assume socket closed.
                                 if session.socket is not None:
                                     self.log.error("Socket closed for " \
                                         "Monitor %s." % session.monitor_id)
                                     self.__restart_session(session)
                                 continue
-                        
-                            if response_type != PUBLISH_MESSAGE:
-                                self.log.warn("Response Type (%x) does not match " \
-                                    "PublishMessage (%x)" \
+                            elif response_type == INCOMPLETE:
+                                # More Data to be read.  Continue.
+                                continue
+                            elif response_type != PUBLISH_MESSAGE:
+                                self.log.warn("Response Type (%x) does " \
+                                    "not match PublishMessage (%x)" \
                                     % (response_type, PUBLISH_MESSAGE))
                                 continue
-
-                            session.data = [message_length, ""]
 
                         try:
                             if not _read_msg(session):
@@ -628,9 +648,11 @@ class PushClient(object):
                                 continue
                         except PushException, e:
                             # If Socket is None, it was closed,
-                            # otherwise it was closed when it shouldn't have been
-                            # restart it.
-                            session.data = None
+                            # otherwise it was closed when it shouldn't
+                            # have been restart it.
+                            session.data = ""
+                            session.message_length = 0
+
                             if session.socket is None:
                                 del self.sessions[sck]
                             else:
@@ -639,8 +661,9 @@ class PushClient(object):
                             continue
 
                         # We received full payload, clear session data and parse it.
-                        data = session.data[1]
-                        session.data = None
+                        data = session.data
+                        session.data = ""
+                        session.message_length = 0
                         block_id = struct.unpack('!H', data[0:2])[0]
                         compression = struct.unpack('!B', data[4:5])[0]
                         payload = data[10:]
@@ -722,125 +745,3 @@ class PushClient(object):
                 time.sleep(1)
 
         self.log.info("All worker threads stopped.")
-
-def json_cb(data):
-    """
-    Sample callback, parses data as json and pretty prints it.
-    Returns True if json is valid, False otherwise.
-    
-    Arguments:
-    data -- The payload of the PublishMessage.
-    """
-    try:
-        json_data = json.loads(data)
-        LOG.info("Data Received %s" % json.dumps(json_data, sort_keys=True, 
-                    indent=4))
-        return True
-    except Exception, exception:
-        print exception
-
-    return False
-
-def xml_cb(data):
-    """
-    Sample callback, parses data as xml and pretty prints it.
-    Returns True if xml is valid, False otherwise.
-
-    Arguments:
-    data -- The payload of the PublishMessage.
-    """
-    try:
-        dom = parseString(data)
-        print "Data Received: %s" % (dom.toprettyxml())
-
-        return True
-    except Exception, exception:
-        print exception
-    
-    return False
-
-def get_parser():
-    """ Parser for this script """
-    import argparse
-    parser = argparse.ArgumentParser(description="iDigi Push Client Sample", 
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-
-    parser.add_argument('username', type=str,
-        help='Username to authenticate with.')
-
-    parser.add_argument('password', type=str,
-        help='Password to authenticate with.')
-
-    parser.add_argument('--topics', '-t', dest='topics', action='store', 
-        type=str, default='DeviceCore', 
-        help='A comma-separated list of topics to listen on.')
-
-    parser.add_argument('--host', '-a', dest='host', action='store', 
-        type=str, default='developer.idigi.com', 
-        help='iDigi server to connect to.')
-
-    parser.add_argument('--ca_certs', dest='ca_certs', action='store',
-        type=str,
-        help='File containing iDigi certificates to authenticate server with.')
-
-    parser.add_argument('--insecure', dest='secure', action='store_false',
-        default=True,
-        help='Prevent client from making secure (SSL) connection.')
-
-    parser.add_argument('--compression', dest='compression', action='store',
-        type=str, default='gzip', choices=['none', 'gzip'],
-        help='Compression type to use.')
-
-    parser.add_argument('--format', dest='format', action='store',
-        type=str, default='json', choices=['json', 'xml'],
-        help='Format data should be pushed up in.')
-
-    parser.add_argument('--batchsize', dest='batchsize', action='store',
-        type=int, default=1,
-        help='Amount of messages to batch up before sending data.')
-
-    parser.add_argument('--batchduration', dest='batchduration', action='store',
-        type=int, default=60,
-        help='Seconds to wait before sending batch if batchsize not met.')
-    
-    return parser
-
-def main():
-    """ Main function call """
-    args = get_parser().parse_args()
-    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s', 
-                datefmt='%m/%d/%Y %I:%M:%S %p', level=logging.INFO)
-    LOG.info("Creating Push Client.")
-    client = push_client(args.username, args.password, hostname=args.host,
-                        secure=args.secure, ca_certs=args.ca_certs)
-
-    topics = args.topics.split(',')
-
-    LOG.info("Checking to see if Monitor Already Exists.")
-    monitor_id = client.get_monitor(topics)
-
-    # Delete Monitor if it Exists.
-    if monitor_id is not None:
-        LOG.info("Monitor already exists, deleting it.")
-        client.delete_monitor(monitor_id)
-
-    monitor_id = client.create_monitor(topics, format_type=args.format,
-        compression=args.compression, batch_size=args.batchsize, 
-        batch_duration=args.batchduration)
-
-    try:
-        callback = json_cb if args.format == "json" else xml_cb
-        client.create_session(callback, monitor_id)
-        while True:
-            time.sleep(3.14)
-    except KeyboardInterrupt:
-        # Expect KeyboardInterrupt (CTRL+C or CTRL+D) and print friendly msg.
-        LOG.warn("Closing Sessions and Cleaning Up.")
-    finally:
-        client.stop_all()
-        LOG.info("Deleting Monitor %s." % monitor_id)
-        client.delete_monitor(monitor_id)
-        LOG.info("Done")
-
-if __name__ == "__main__":
-    main()
