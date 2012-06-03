@@ -2,7 +2,7 @@
 import sys
 sys.path.append('..')
 
-import push_client
+from idigi_monitor_api import push_client
 import logging
 import time
 import json
@@ -49,9 +49,9 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    client = push_client.PushClient(args.username, args.password, 
+    client = push_client(args.username, args.password, 
                         hostname=args.host,
-                        secure=False, ca_certs='../idigi.pem')
+                        secure=True)
 
     topics = ['DiaChannelDataFull']
 
