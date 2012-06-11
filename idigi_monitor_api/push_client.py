@@ -227,12 +227,8 @@ ConnectionResponse Type (%d)." % (response_type, CONNECTION_RESPONSE))
             if status_code != STATUS_OK:
                 raise PushException("Connection Response Status Code (%d) is \
 not STATUS_OK (%d)." % (status_code, STATUS_OK))
-
-            # Add Incredibly arbitrary sleep as it takes ms for iDigi to 
-            # inform every member of Cluster that there is a new monitor
-            # session.
-            time.sleep(.5)
         except Exception, exception:
+            # Likely a socket exception, close it and raise an exception.
             self.socket.close()
             self.socket = None
             raise exception
@@ -279,18 +275,15 @@ class SecurePushSession(PushSession):
         """
         Creates a PushSession wrapped in SSL for use with interacting with 
         iDigi's Push Functionality.
-        
-        Arguments:
-        callback   -- The callback function to invoke when data is received.  
-                      Must have 1 required parameter that will contain the
-                      payload.
-        monitor_id -- The id of the Monitor to observe.
-        client     -- The client object this session is derived from.
-        
-        Keyword Arguments:
-        ca_certs -- Path to a file containing Certificates.  If not None,
-                    iDigi Server must present a certificate present in the 
-                    ca_certs file.
+
+        :param callback: The callback function to invoke when data is received.  
+            Must have 1 required parameter that will contain the
+            payload.
+        :param monitor_id: The id of the Monitor to observe.
+        :param client: The client object this session is derived from.
+        :param ca_certs: Path to a file containing Certificates.  
+            If not provided, the idigi.crt file provided with the module will 
+            be used.  In most cases, the idigi.crt file should be acceptable.
         """
         PushSession.__init__(self, callback, monitor_id, client)
         # Fall back on idigi.crt in the same path as this module if not 
@@ -302,7 +295,8 @@ class SecurePushSession(PushSession):
         Creates a SSL connection to the iDigi Server and sends a 
         ConnectionRequest message.
         """
-        self.log.info("Starting SSL Session for Monitor %s." % self.monitor_id)
+        self.log.info("Starting SSL Session for Monitor %s." 
+            % self.monitor_id)
         if self.socket is not None:
             raise Exception("Socket already established for %s." % self)
         
@@ -433,7 +427,8 @@ class PushClient(object):
 
         self.headers           = {
             'Authorization': 'Basic ' \
-            + base64.encodestring('%s:%s' % (self.username,self.password))[:-1]
+            + base64.encodestring('%s:%s' %
+                (self.username,self.password))[:-1]
         }
 
     def get_http_connection(self):
@@ -450,17 +445,14 @@ class PushClient(object):
         """
         Creates a Monitor instance in iDigi for a given list of topics.
         
-        Arguments:
-        topics -- a string list of topics (i.e. ['DeviceCore[U]', 
+        :param topics: a string list of topics (i.e. ['DeviceCore[U]', 
                   'FileDataCore']).
-        
-        Keyword Arguments:
-        batch_size     -- How many Msgs received before sending data.
-        batch_duration -- How long to wait before sending batch if it does not 
-                          exceed batch_size.
-        compression    -- Compression value (i.e. 'gzip').
-        format_type    -- What format server should send data in (i.e. 'xml' or 
-                          'json').
+        :param batch_size: How many Msgs received before sending data.
+        :param batrch_duration: How long to wait before sending batch if it 
+            does not exceed batch_size.
+        :param compression: Compression value (i.e. 'gzip').
+        :param format_type: What format server should send data in (i.e. 
+            'xml' or 'json').
         
         Returns a string of the created Monitor Id (i.e. 9001)
         """
@@ -484,8 +476,7 @@ class PushClient(object):
 
         # POST Monitor Request.
         connection = self.get_http_connection()
-        connection.request('POST', '/ws/Monitor', request, 
-                                        self.headers)
+        connection.request('POST', '/ws/Monitor', request, self.headers)
         response = connection.getresponse()
         try:
             if response.status == 201:
@@ -502,9 +493,8 @@ class PushClient(object):
         """
         Attempts to Delete a Monitor from iDigi.  Throws exception if 
         Monitor does not exist.
-        
-        Arguments:
-        monitor_id -- id of the Monitor (i.e. 1000).
+
+        :param monitor_id: id of the Monitor (i.e. 1000).
         """
 
         connection = self.get_http_connection()
@@ -524,9 +514,8 @@ class PushClient(object):
         Attempts to find a Monitor in iDigi that matches the input list of 
         topics.
         
-        Arguments:
-        topics -- a string list of topics 
-                  (i.e. ['DeviceCore[U]', 'FileDataCore']).
+        :param topics: a string list of topics 
+            (i.e. ['DeviceCore[U]', 'FileDataCore']).
         
         Returns a monitor ID if found, otherwise None.
         """
@@ -560,8 +549,7 @@ class PushClient(object):
         """
         Restarts and re-establishes session.
 
-        Arguments:
-        session -- The session to restart.
+        :param session: The session to restart.
         """
         # remove old session key, if socket is None, that means the
         # session was closed by user and there is no need to restart.
@@ -660,7 +648,8 @@ class PushClient(object):
                                 self.__restart_session(session)
                             continue
 
-                        # We received full payload, clear session data and parse it.
+                        # We received full payload, 
+                        # clear session data and parse it.
                         data = session.data
                         session.data = ""
                         session.message_length = 0
@@ -707,14 +696,13 @@ class PushClient(object):
         and callback.  When data is received, callback will be invoked.
         If neither monitor or monitor_id are specified, throws an Exception.
         
-        Arguments:
-        callback -- Callback function to call when PublishMessage messages are
-                    received. Expects 1 argument which will contain the 
-                    payload of the pushed message.  Additionally, expects 
-                    function to return True if callback was able to process 
-                    the message, False or None otherwise.
-        monitor_id -- The id of the Monitor, will be queried 
-                      to understand parameters of the monitor.
+        :param callback: Callback function to call when PublishMessage 
+            messages are received. Expects 1 argument which will contain the 
+            payload of the pushed message.  Additionally, expects 
+            function to return True if callback was able to process 
+            the message, False or None otherwise.
+        :param monitor_id: The id of the Monitor, will be queried 
+            to understand parameters of the monitor.
         """
         self.log.info("Creating Session for Monitor %s." % monitor_id)
         session = SecurePushSession(callback, monitor_id, self, self.ca_certs) \
