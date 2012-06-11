@@ -1,3 +1,22 @@
+# ***************************************************************************
+# Copyright (c) 2012 Digi International Inc.,
+# All rights not expressly granted are reserved.
+# 
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this file,
+# You can obtain one at http://mozilla.org/MPL/2.0/.
+# 
+# Digi International Inc. 11001 Bren Road East, Minnetonka, MN 55343
+#
+# ***************************************************************************
+"""
+Push Client Example
+
+An example push_client method.  Call with '-h' for usage.
+
+Demonstrates simple xml and json callbacks for printing data as it is 
+received.
+"""
 import argparse
 import json
 import logging
@@ -12,9 +31,8 @@ def json_cb(data):
     """
     Sample callback, parses data as json and pretty prints it.
     Returns True if json is valid, False otherwise.
-    
-    Arguments:
-    data -- The payload of the PublishMessage.
+
+    :param data: The payload of the PublishMessage.
     """
     try:
         json_data = json.loads(data)
@@ -30,14 +48,12 @@ def xml_cb(data):
     """
     Sample callback, parses data as xml and pretty prints it.
     Returns True if xml is valid, False otherwise.
-
-    Arguments:
-    data -- The payload of the PublishMessage.
+    
+    :param data: The payload of the PublishMessage.
     """
     try:
         dom = parseString(data)
-        print "Data Received: %s" % (dom.toprettyxml())
-
+        LOG.info("Data Received: %s" % (dom.toprettyxml()))
         return True
     except Exception, exception:
         print exception
@@ -60,7 +76,7 @@ def get_parser():
         help='A comma-separated list of topics to listen on.')
 
     parser.add_argument('--host', '-a', dest='host', action='store', 
-        type=str, default='developer.idigi.com', 
+        type=str, default='my.idigi.com', 
         help='iDigi server to connect to.')
 
     parser.add_argument('--insecure', dest='insecure', action='store_true',
