@@ -671,7 +671,7 @@ class PushClient(object):
                     # socket is gone, delete the session.
                     if err.args[0] == errno.EBADF:
                         self.__clean_dead_sessions()
-                except Exception,err:
+                except Exception, err:
                     self.log.exception(err)
         finally:
             for session in self.sessions.values():
