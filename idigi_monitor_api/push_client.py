@@ -467,10 +467,10 @@ class PushClient(object):
                     'monTransportType' : 'tcp',
                     'monCompression' : compression }
 
-        for element, value in attrs.items():
-            el = monitor_req.createElement(element)
-            el.appendChild(monitor_req.createTextNode(value))
-            root.appendChild(el)
+        for tag, value in attrs.items():
+            element = monitor_req.createElement(tag)
+            element.appendChild(monitor_req.createTextNode(value))
+            root.appendChild(element)
 
         request = root.toxml()
 
@@ -521,7 +521,7 @@ class PushClient(object):
         """
         # Query for Monitor conditionally by monTopic.
         params = {'condition' : "monTopic='%s'" % ','.join(topics)}
-        url = '/ws/Monitor/.json?' + urllib.urlencode([(key,params[key]) \
+        url = '/ws/Monitor/.json?' + urllib.urlencode([(key, params[key]) \
             for key in params])
         
         connection = self.get_http_connection()
@@ -539,7 +539,8 @@ class PushClient(object):
             monitor_data = json.loads(content)
 
             # If no matching Monitor found, return None.
-            if monitor_data['resultSize'] == '0': return None
+            if monitor_data['resultSize'] == '0': 
+                return None
             # Otherwise grab the first found monitor's id.
             return monitor_data['items'][0]['monId']
         finally:
@@ -573,8 +574,8 @@ class PushClient(object):
                 sock.send(data)
             except Empty:
                 pass # nothing to write after timeout
-            except socket.error, e:
-                if e.errno == errno.EBADF:
+            except socket.error, err:
+                if err.errno == errno.EBADF:
                     self.__clean_dead_sessions()
 
     def __clean_dead_sessions(self):
@@ -634,7 +635,7 @@ class PushClient(object):
                             if not _read_msg(session):
                                 # Data not completely read, continue.
                                 continue
-                        except PushException, e:
+                        except PushException, err:
                             # If Socket is None, it was closed,
                             # otherwise it was closed when it shouldn't
                             # have been restart it.
@@ -644,7 +645,7 @@ class PushClient(object):
                             if session.socket is None:
                                 del self.sessions[sck]
                             else:
-                                self.log.exception(e)	
+                                self.log.exception(err)	
                                 self.__restart_session(session)
                             continue
 
@@ -665,13 +666,13 @@ class PushClient(object):
                         # invoked.
                         self.__callback_pool.queue_callback(session, 
                             block_id, payload)
-                except select.error, e:
+                except select.error, err:
                     # Evaluate sessions if we get a bad file descriptor, if 
                     # socket is gone, delete the session.
-                    if e.args[0] == errno.EBADF:
+                    if err.args[0] == errno.EBADF:
                         self.__clean_dead_sessions()
-                except Exception,e:
-                    self.log.exception(e)
+                except Exception,err:
+                    self.log.exception(err)
         finally:
             for session in self.sessions.values():
                 if session is not None: 
