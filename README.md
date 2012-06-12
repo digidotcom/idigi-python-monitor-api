@@ -72,7 +72,7 @@ finally:
     print "Done"
 ```
 
-And that's it!  You can verify your code by disconnecting your device from iDigi:
+And that's it!  You can verify your code by disconnecting a device from iDigi:
 
 ```json
 Data Received {
