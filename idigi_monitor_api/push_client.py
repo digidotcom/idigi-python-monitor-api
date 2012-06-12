@@ -441,7 +441,7 @@ class PushClient(object):
 
 
     def create_monitor(self, topics, batch_size=1, batch_duration=0, 
-        compression='gzip', format_type='xml'):
+        compression='gzip', format_type='json'):
         """
         Creates a Monitor instance in iDigi for a given list of topics.
         
