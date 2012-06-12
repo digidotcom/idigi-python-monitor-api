@@ -29,7 +29,7 @@ Example Usage
 -------------
 The Push Monitoring API is very easy to use.  Following the usage pattern detailed above a Push Monitor can be created and used in the following manner.
 
-First, import the api and create a push client object with your client credentials.
+First, import the api and create a push client object with your iDigi login credentials.
 
 ```python
 from idigi_monitor_api import push_client
